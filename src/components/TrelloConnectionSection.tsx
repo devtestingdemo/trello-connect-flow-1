@@ -10,13 +10,19 @@ import { toast } from "@/hooks/use-toast";
 
 interface TrelloConnectionSectionProps {
   onConnectionSuccess: (boards: any[]) => void;
+  apiKey: string;
+  setApiKey: (key: string) => void;
+  token: string;
+  setToken: (token: string) => void;
 }
 
 export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = ({
-  onConnectionSuccess
+  onConnectionSuccess,
+  apiKey,
+  setApiKey,
+  token,
+  setToken
 }) => {
-  const [apiKey, setApiKey] = useState('');
-  const [token, setToken] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [boards, setBoards] = useState([]);
 
@@ -31,24 +37,51 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
     }
 
     setIsConnecting(true);
-    
-    // Simulate API connection and board fetching
-    setTimeout(() => {
-      const mockBoards = [
-        { id: '1', name: 'Project Management', lists: ['To Do', 'In Progress', 'Done'] },
-        { id: '2', name: 'Marketing Campaign', lists: ['Ideas', 'Planning', 'Execution'] },
-        { id: '3', name: 'Development Sprint', lists: ['Backlog', 'In Review', 'Testing'] }
-      ];
-      
-      setBoards(mockBoards);
-      onConnectionSuccess(mockBoards);
+
+    try {
+      // Verify credentials by fetching the user's info
+      const userRes = await fetch(`https://api.trello.com/1/members/me?key=${apiKey}&token=${token}`);
+      if (!userRes.ok) {
+        throw new Error("Invalid API Key or Token");
+      }
+      const user = await userRes.json();
+
+      // Fetch boards
+      const boardsRes = await fetch(`https://api.trello.com/1/members/me/boards?key=${apiKey}&token=${token}`);
+      if (!boardsRes.ok) {
+        throw new Error("Failed to fetch boards");
+      }
+      const boardsData = await boardsRes.json();
+
+      // For each board, fetch its lists
+      const boardsWithLists = await Promise.all(
+        boardsData.map(async (board: any) => {
+          const listsRes = await fetch(`https://api.trello.com/1/boards/${board.id}/lists?key=${apiKey}&token=${token}`);
+          const listsData = listsRes.ok ? await listsRes.json() : [];
+          return {
+            id: board.id,
+            name: board.name,
+            lists: listsData.map((list: any) => list.name)
+          };
+        })
+      );
+
+      setBoards(boardsWithLists);
+      onConnectionSuccess(boardsWithLists);
       setIsConnecting(false);
-      
+
       toast({
         title: "Successfully connected!",
-        description: `Found ${mockBoards.length} Trello boards`,
+        description: `Found ${boardsWithLists.length} Trello boards`,
       });
-    }, 2000);
+    } catch (err: any) {
+      setIsConnecting(false);
+      toast({
+        title: "Connection failed",
+        description: err.message || "Could not connect to Trello. Please check your credentials.",
+        variant: "destructive"
+      });
+    }
   };
 
   return (

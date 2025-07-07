@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,21 +13,22 @@ import { toast } from "@/hooks/use-toast";
 interface WebhookManagementSectionProps {
   trelloBoards: any[];
   trelloConnected: boolean;
+  apiKey: string;
+  token: string;
 }
 
 export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> = ({
   trelloBoards,
-  trelloConnected
+  trelloConnected,
+  apiKey,
+  token
 }) => {
   const [selectedEvent, setSelectedEvent] = useState('');
   const [selectedBoard, setSelectedBoard] = useState('');
   const [selectedList, setSelectedList] = useState('');
   const [selectedLabel, setSelectedLabel] = useState('');
   const [inviteEmails, setInviteEmails] = useState('');
-  const [webhooks, setWebhooks] = useState([
-    { id: '1', event: 'Card moved', board: 'Project Management', status: 'active' },
-    { id: '2', event: 'Card assigned', board: 'Development Sprint', status: 'paused' }
-  ]);
+  const [webhooks, setWebhooks] = useState([]);
 
   const eventTypes = [
     'Mentioned in a card',
@@ -42,7 +43,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
   const labels = ['High Priority', 'Bug', 'Feature', 'Documentation', 'Review'];
 
-  const handleRegisterWebhook = () => {
+  const handleRegisterWebhook = async () => {
     if (!selectedEvent || !selectedBoard) {
       toast({
         title: "Missing information",
@@ -51,26 +52,74 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       });
       return;
     }
-
-    const newWebhook = {
-      id: Date.now().toString(),
-      event: selectedEvent,
-      board: selectedBoard,
-      status: 'active'
-    };
-
-    setWebhooks([...webhooks, newWebhook]);
-    
-    toast({
-      title: "Webhook registered!",
-      description: `Webhook for "${selectedEvent}" on "${selectedBoard}" has been created`,
-    });
-
-    // Reset form
-    setSelectedEvent('');
-    setSelectedBoard('');
-    setSelectedList('');
-    setSelectedLabel('');
+    if (!apiKey || !token) {
+      toast({
+        title: "Missing Trello credentials",
+        description: "Please connect Trello and provide API Key & Token.",
+        variant: "destructive"
+      });
+      return;
+    }
+    try {
+      // Find the board id
+      const boardObj = trelloBoards.find(b => b.name === selectedBoard);
+      if (!boardObj) throw new Error("Board not found");
+      // Trello webhook API: https://developer.atlassian.com/cloud/trello/guides/webhooks/
+      // You must provide a callbackURL that Trello can reach (publicly accessible)
+      //w.location.origin + "/api/trello-webhook-callback";
+      // Us For demo, we'll use a placeholder. In production, replace with your backend endpoint.
+      const callbackURL = "https://hook.eu2.make.com/lz2x1x7y29933vbj03kaq6cwwcqq4u2d";  
+      console.log("apiKey, token, boardObj");
+      
+      console.log(apiKey, token, boardObj);
+      console.log(callbackURL);
+      console.log(boardObj.id);
+      console.log(selectedEvent);
+      console.log(selectedBoard);
+      //windoe Trello's /1/tokens/{token}/webhooks/ endpoint as in the curl example
+      const response = await fetch(`https://api.trello.com/1/tokens/${token}/webhooks/`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: apiKey,
+            callbackURL,
+            idModel: boardObj.id,
+            description: `Webhook for ${selectedEvent} on ${selectedBoard}`
+          })
+        }
+      );
+      console.log(response);
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message || 'Failed to register webhook');
+      }
+      const webhookData = await response.json();
+      console.log(webhookData);
+      const newWebhook = {
+        id: webhookData.id,
+        event: selectedEvent,
+        board: selectedBoard,
+        status: 'active'
+      };
+      setWebhooks([...webhooks, newWebhook]);
+      toast({
+        title: "Webhook registered!",
+        description: `Webhook for \"${selectedEvent}\" on \"${selectedBoard}\" has been created`,
+      });
+      // Reset form
+      setSelectedEvent('');
+      setSelectedBoard('');
+      setSelectedList('');
+      setSelectedLabel('');
+    } catch (err: any) {
+      console.log(err);
+      toast({
+        title: "Webhook registration failed",
+        description: err.message || 'Could not register webhook with Trello.',
+        variant: "destructive"
+      });
+    }
   };
 
   const handleStopAllWebhooks = () => {
@@ -88,6 +137,44 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       description: "All webhooks have been reactivated",
     });
   };
+
+  const fetchWebhooks = async () => {
+    if (!apiKey || !token) {
+      toast({
+        title: "Missing Trello credentials",
+        description: "Please connect Trello and provide API Key & Token.",
+        variant: "destructive"
+      });
+      return;
+    }
+    try {
+      const response = await fetch(`https://api.trello.com/1/tokens/${token}/webhooks?key=${apiKey}`);
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message || 'Failed to fetch webhooks');
+      }
+      const data = await response.json();
+      setWebhooks(data.map((wh: any) => ({
+        id: wh.id,
+        event: wh.description, // Trello doesn't store your custom event, so use description
+        board: trelloBoards.find(b => b.id === wh.idModel)?.name || wh.idModel,     // You may want to resolve this to a board name
+        status: wh.active ? 'active' : 'inactive'
+      })));
+    } catch (err: any) {
+      toast({
+        title: "Failed to fetch webhooks",
+        description: err.message || 'Could not fetch webhooks from Trello.',
+        variant: "destructive"
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (apiKey && token) {
+      fetchWebhooks();
+    }
+    // eslint-disable-next-line
+  }, [apiKey, token]);
 
   if (!trelloConnected) {
     return (
@@ -218,6 +305,9 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
             <Button variant="outline">
               <RotateCcw className="w-4 h-4 mr-2" />
               Re-register All Webhooks
+            </Button>
+            <Button onClick={fetchWebhooks} variant="outline">
+              Refresh Webhooks
             </Button>
           </div>
         </CardContent>

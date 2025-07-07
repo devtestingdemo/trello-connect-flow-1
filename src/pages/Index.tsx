@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,11 +13,65 @@ import { GoogleAuthSection } from "@/components/GoogleAuthSection";
 import { TrelloConnectionSection } from "@/components/TrelloConnectionSection";
 import { WebhookManagementSection } from "@/components/WebhookManagementSection";
 
+const saveUserCredentials = async (email: string, apiKey: string, token: string) => {
+  const response = await fetch('http://localhost:5000/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, apiKey, token }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to save user');
+  }
+  return await response.json();
+};
+
+const getUserCredentials = async (email: string) => {
+  const response = await fetch(`http://localhost:5000/api/users/${email}`);
+  if (!response.ok) {
+    throw new Error('User not found');
+  }
+  return await response.json();
+};
+
 const Index = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
+  // Restore auth state from localStorage if available
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    const stored = localStorage.getItem('isAuthenticated');
+    return stored === 'true';
+  });
+  const [userEmail, setUserEmail] = useState(() => {
+    return localStorage.getItem('userEmail') || '';
+  });
   const [trelloConnected, setTrelloConnected] = useState(false);
   const [trelloBoards, setTrelloBoards] = useState([]);
+  const [apiKey, setApiKey] = useState('');
+  const [token, setToken] = useState('');
+
+  // Persist auth state to localStorage
+  useEffect(() => {
+    localStorage.setItem('isAuthenticated', isAuthenticated ? 'true' : 'false');
+    if (userEmail) {
+      localStorage.setItem('userEmail', userEmail);
+    } else {
+      localStorage.removeItem('userEmail');
+    }
+  }, [isAuthenticated, userEmail]);
+
+  // Load credentials from backend if userEmail is set
+  useEffect(() => {
+    if (userEmail) {
+      getUserCredentials(userEmail)
+        .then((data) => {
+          setApiKey(data.apiKey);
+          setToken(data.token);
+        })
+        .catch(() => {
+          setApiKey('');
+          setToken('');
+        });
+    }
+    // eslint-disable-next-line
+  }, [userEmail]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -41,6 +95,20 @@ const Index = () => {
             onAuthSuccess={(email) => {
               setIsAuthenticated(true);
               setUserEmail(email);
+            }}
+            onSignOut={() => {
+              setIsAuthenticated(false);
+              setUserEmail('');
+              // @ts-ignore: google is injected by Google Identity Services
+              if (window.google && window.google.accounts && window.google.accounts.id) {
+                // @ts-ignore
+                window.google.accounts.id.disableAutoSelect();
+              }
+              setApiKey('');
+              setToken('');
+              // Clear persisted auth state
+              localStorage.removeItem('isAuthenticated');
+              localStorage.removeItem('userEmail');
             }}
           />
 
@@ -67,9 +135,20 @@ const Index = () => {
                 </AccordionTrigger>
                 <AccordionContent className="px-6 pb-6">
                   <TrelloConnectionSection 
-                    onConnectionSuccess={(boards) => {
+                    apiKey={apiKey}
+                    setApiKey={setApiKey}
+                    token={token}
+                    setToken={setToken}
+                    onConnectionSuccess={async (boards) => {
                       setTrelloConnected(true);
                       setTrelloBoards(boards);
+                      if (userEmail && apiKey && token) {
+                        try {
+                          await saveUserCredentials(userEmail, apiKey, token);
+                        } catch (e) {
+                          // Optionally handle error
+                        }
+                      }
                     }}
                   />
                 </AccordionContent>
@@ -92,6 +171,8 @@ const Index = () => {
                   <WebhookManagementSection 
                     trelloBoards={trelloBoards}
                     trelloConnected={trelloConnected}
+                    apiKey={apiKey}
+                    token={token}
                   />
                 </AccordionContent>
               </AccordionItem>
