@@ -1,0 +1,7 @@
+Flask
+Flask-Cors
+requests
+redis
+rq
+SQLAlchemy
+flask-sqlalchemy
