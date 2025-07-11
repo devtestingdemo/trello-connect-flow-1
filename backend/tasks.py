@@ -41,8 +41,10 @@ def process_trello_event(payload):
             print(f'[Worker] No webhook setting found for webhook_id {webhook_id}')
             return
         # Only proceed if the event type matches the setting
-        # Map 'Mentioned in a card' to 'commentCard' for comparison
-        setting_event_type = "commentCard" if setting.event_type == "Mentioned in a card" else setting.event_type
+        # Map 'Mentioned in a card' to 'commentCard' and 'Added to a card' to 'addMemberToCard' for comparison
+        setting_event_type = "commentCard" if setting.event_type == "Mentioned in a card" else (
+            "addMemberToCard" if setting.event_type == "Added to a card" else setting.event_type
+        )
 
         if event_type != setting_event_type:
             print(f"[Worker] Event type {event_type} does not match setting {setting_event_type}")
@@ -56,10 +58,18 @@ def process_trello_event(payload):
             print("Could not fetch Trello username, skipping.")
             return
 
-        comment_text = payload['action']['data'].get('text', '')
-        if f"@{trello_username}" not in comment_text:
-            print("User not mentioned in comment, skipping.")
-            return
+        # Event-specific checks
+        if event_type == "commentCard":
+            comment_text = payload['action']['data'].get('text', '')
+            if f"@{trello_username}" not in comment_text:
+                print("User not mentioned in comment, skipping.")
+                return
+        elif event_type == "addMemberToCard":
+            # Check if the user was added to the card
+            member_added = payload['action']['member'].get('username') if payload['action'].get('member') else None
+            if member_added != trello_username:
+                print(f"User {trello_username} was not added to the card, skipping.")
+                return
 
         api_key = user.apiKey
         token = user.token
@@ -85,6 +95,21 @@ def process_trello_event(payload):
         if not new_card_id:
             print('[Worker] No new card id after copy')
             return
+
+        # Link the main card to the copied card as an attachment
+        main_card_url = f"https://trello.com/c/{card_id}"
+        main_card_name = action.get('data', {}).get('card', {}).get('name', 'Main Card')
+        attachment_url = f"https://api.trello.com/1/cards/{new_card_id}/attachments?key={api_key}&token={token}"
+        attachment_payload = {
+            "url": main_card_url,
+            "name": f"Original Card: {main_card_name}"
+        }
+        attach_resp = call_trello_api("POST", attachment_url, json=attachment_payload)
+        if not attach_resp or attach_resp.status_code not in [200, 201]:
+            print(f"[Worker] Failed to attach main card link to copied card {new_card_id}")
+        else:
+            print(f"[Worker] Linked main card {card_id} to copied card {new_card_id} as attachment.")
+
         # Apply label if specified
         if setting.label:
             # Find label id on the board

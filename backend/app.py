@@ -91,6 +91,7 @@ def trello_webhook():
             if not request.is_json:
                 return jsonify({'error': 'Content-Type must be application/json'}), 415
             payload = request.get_json(silent=True)
+            #print("trello_webhook :: payload ::",payload)
             if not payload:
                 return jsonify({'success': True}), 200
             if 'action' not in payload:
@@ -110,7 +111,9 @@ def trello_webhook():
 
             # Get all event_types for this user and webhook
             allowed_event_types = [
-                "commentCard" if s.event_type == "Mentioned in a card" else s.event_type
+                "commentCard" if s.event_type == "Mentioned in a card" else (
+                    "addMemberToCard" if s.event_type == "Added to a card" else s.event_type
+                )
                 for s in WebhookSetting.query.filter_by(
                     user_email=setting.user_email,
                     webhook_id=webhook_id
