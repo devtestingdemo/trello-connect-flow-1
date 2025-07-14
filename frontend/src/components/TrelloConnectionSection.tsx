@@ -41,33 +41,32 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
     setIsConnecting(true);
 
     try {
-      // Verify credentials by fetching the user's info
-      const userRes = await fetch(`https://api.trello.com/1/members/me?key=${apiKey}&token=${token}`);
-      if (!userRes.ok) {
-        throw new Error("Invalid API Key or Token");
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      // Verify credentials by calling backend
+      const verifyRes = await fetch(`${API_BASE_URL}/trello/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, token })
+      });
+      if (!verifyRes.ok) {
+        const err = await verifyRes.json();
+        throw new Error(err.error || "Invalid API Key or Token");
       }
-      const user = await userRes.json();
+      const user = await verifyRes.json();
       const userEmail = user.email || user.username || user.id;
 
-      // Fetch boards
-      const boardsRes = await fetch(`https://api.trello.com/1/members/me/boards?key=${apiKey}&token=${token}`);
+      // Fetch boards and lists from backend
+      const boardsRes = await fetch(`${API_BASE_URL}/trello/boards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, token })
+      });
       if (!boardsRes.ok) {
-        throw new Error("Failed to fetch boards");
+        const err = await boardsRes.json();
+        throw new Error(err.error || "Failed to fetch boards");
       }
       const boardsData = await boardsRes.json();
-
-      // For each board, fetch its lists
-      const boardsWithLists = await Promise.all(
-        boardsData.map(async (board: any) => {
-          const listsRes = await fetch(`https://api.trello.com/1/boards/${board.id}/lists?key=${apiKey}&token=${token}`);
-          const listsData = listsRes.ok ? await listsRes.json() : [];
-          return {
-            id: board.id,
-            name: board.name,
-            lists: listsData.map((list: any) => list.name)
-          };
-        })
-      );
+      const boardsWithLists = boardsData.boards || [];
 
       setBoards(boardsWithLists);
       onConnectionSuccess(boardsWithLists);
@@ -79,7 +78,6 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
       });
 
       // Call backend to setup board and lists if not already present
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
       const setupRes = await fetch(`${API_BASE_URL}/trello/setup-board`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

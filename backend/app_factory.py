@@ -5,13 +5,16 @@ from flask_cors import CORS
 from db import db
 from redis import Redis
 from rq import Queue
+from dotenv import load_dotenv
 import os
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 def create_app():
     app = Flask(__name__)
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///users.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    redis_url = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+    redis_port = os.environ.get('REDIS_PORT', '6379')
+    redis_url = f"redis://redis:{redis_port}/0"
     redis_conn = Redis.from_url(redis_url)
     q = Queue('trello-events', connection=redis_conn)
     CORS(app)

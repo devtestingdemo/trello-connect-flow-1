@@ -4,34 +4,39 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT}:${REDIS_PORT}"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   backend:
     build: ./backend
-    command: flask run --host=0.0.0.0 --port=5000
+    command: flask run --host=${FLASK_RUN_HOST} --port=${FLASK_RUN_PORT}
     volumes:
       - ./backend:/app
-    environment:
-      - FLASK_APP=app.py
-      - FLASK_ENV=development
-      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
     ports:
-      - "5000:5000"
+      - "${FLASK_RUN_PORT}:${FLASK_RUN_PORT}"
     depends_on:
       - redis
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   worker:
     build: ./backend
-    command: rq worker trello-events --url redis://redis:6379/0
+    command: rq worker trello-events --url redis://redis:${REDIS_PORT}/0
     volumes:
       - ./backend:/app
-    environment:
-      - FLASK_APP=app.py
-      - FLASK_ENV=development
-      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
     depends_on:
       - redis
       - backend
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   frontend:
     build: ./frontend
@@ -42,4 +47,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      - backend   
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1   

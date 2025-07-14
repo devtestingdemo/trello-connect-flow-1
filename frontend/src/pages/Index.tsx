@@ -80,21 +80,14 @@ const Index = () => {
     const fetchBoards = async () => {
       if (apiKey && token) {
         try {
-          const boardsRes = await fetch(`https://api.trello.com/1/members/me/boards?key=${apiKey}&token=${token}`);
+          const boardsRes = await fetch(`${API_BASE_URL}/trello/boards`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey, token })
+          });
           if (!boardsRes.ok) throw new Error('Failed to fetch boards');
           const boardsData = await boardsRes.json();
-          // For each board, fetch its lists
-          const boardsWithLists = await Promise.all(
-            boardsData.map(async (board) => {
-              const listsRes = await fetch(`https://api.trello.com/1/boards/${board.id}/lists?key=${apiKey}&token=${token}`);
-              const listsData = listsRes.ok ? await listsRes.json() : [];
-              return {
-                id: board.id,
-                name: board.name,
-                lists: listsData.map((list) => list.name)
-              };
-            })
-          );
+          const boardsWithLists = boardsData.boards || [];
           setTrelloBoards(boardsWithLists);
           setTrelloConnected(true);
         } catch {

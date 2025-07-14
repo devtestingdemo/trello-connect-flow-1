@@ -5,3 +5,4 @@ redis
 rq
 SQLAlchemy
 flask-sqlalchemy
+python-dotenv

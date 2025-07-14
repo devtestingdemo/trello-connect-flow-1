@@ -4,11 +4,16 @@ from db import db, User, WebhookSetting, UserBoard
 from redis import Redis
 from rq import Queue
 from tasks import process_trello_event
+from dotenv import load_dotenv
 import os
 from app_factory import create_app
 import requests
 import json
+
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 app, q = create_app()
+
 
 
 @app.route('/api/users', methods=['POST'])
@@ -72,6 +77,16 @@ def delete_webhook_setting(webhook_id):
     setting = WebhookSetting.query.filter_by(webhook_id=webhook_id).first()
     if not setting:
         return jsonify({'error': 'Webhook setting not found'}), 404
+    # Remove webhook from Trello
+    user = User.query.filter_by(email=setting.user_email).first()
+    if user:
+        trello_delete_url = f"https://api.trello.com/1/webhooks/{webhook_id}?key={user.apiKey}&token={user.token}"
+        try:
+            trello_resp = requests.delete(trello_delete_url)
+            if trello_resp.status_code not in [200, 204]:
+                print(f"Failed to delete Trello webhook: {trello_resp.text}")
+        except Exception as e:
+            print(f"Exception while deleting Trello webhook: {e}")
     db.session.delete(setting)
     db.session.commit()
     return jsonify({'message': 'Webhook setting deleted'}), 200
@@ -190,6 +205,102 @@ def setup_trello_board():
     db.session.commit()
     return jsonify({'message': 'Board created', 'board': user_board.to_dict()}), 201
 
+@app.route('/api/trello/verify', methods=['POST'])
+def trello_verify():
+    data = request.json
+    api_key = data.get('apiKey')
+    token = data.get('token')
+    if not api_key or not token:
+        return jsonify({'error': 'Missing apiKey or token'}), 400
+    url = f'https://api.trello.com/1/members/me?key={api_key}&token={token}'
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        return jsonify({'error': 'Invalid API Key or Token', 'details': resp.text}), 401
+    return jsonify(resp.json()), 200
+
+@app.route('/api/trello/boards', methods=['POST'])
+def trello_get_boards():
+    data = request.json
+    api_key = data.get('apiKey')
+    token = data.get('token')
+    if not api_key or not token:
+        return jsonify({'error': 'Missing apiKey or token'}), 400
+    boards_url = f'https://api.trello.com/1/members/me/boards?key={api_key}&token={token}'
+    boards_resp = requests.get(boards_url)
+    if boards_resp.status_code != 200:
+        return jsonify({'error': 'Failed to fetch boards', 'details': boards_resp.text}), 400
+    boards_data = boards_resp.json()
+    # For each board, fetch its lists
+    boards_with_lists = []
+    for board in boards_data:
+        lists_url = f'https://api.trello.com/1/boards/{board["id"]}/lists?key={api_key}&token={token}'
+        lists_resp = requests.get(lists_url)
+        lists_data = lists_resp.json() if lists_resp.status_code == 200 else []
+        boards_with_lists.append({
+            'id': board['id'],
+            'name': board['name'],
+            'lists': [l['name'] for l in lists_data]
+        })
+    return jsonify({'boards': boards_with_lists}), 200
+
+@app.route('/api/trello/webhooks', methods=['POST'])
+def trello_register_webhook():
+    data = request.json
+    api_key = data.get('apiKey')
+    token = data.get('token')
+    callback_url = data.get('callbackURL')
+    id_model = data.get('idModel')
+    description = data.get('description', '')
+    if not api_key or not token or not callback_url or not id_model:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    # Check if a Trello webhook already exists for this token/model
+    trello_webhooks_resp = requests.get(f'https://api.trello.com/1/tokens/{token}/webhooks?key={api_key}')
+    if trello_webhooks_resp.status_code == 200:
+        trello_webhooks = trello_webhooks_resp.json()
+        existing = next((wh for wh in trello_webhooks if wh.get('idModel') == id_model and wh.get('callbackURL') == callback_url), None)
+        if existing:
+            # Webhook already exists, reuse it
+            return jsonify(existing), 200
+
+    # Otherwise, create a new Trello webhook
+    url = f'https://api.trello.com/1/tokens/{token}/webhooks/'
+    payload = {
+        'key': api_key,
+        'callbackURL': callback_url,
+        'idModel': id_model,
+        'description': description
+    }
+    resp = requests.post(url, json=payload)
+    if resp.status_code not in [200, 201]:
+        try:
+            err = resp.json()
+            msg = err.get('message', 'Failed to register webhook')
+        except Exception:
+            msg = resp.text
+        return jsonify({'error': msg}), 400
+    return jsonify(resp.json()), 201
+
+@app.route('/api/trello/webhooks', methods=['GET'])
+def trello_get_webhooks():
+    api_key = request.args.get('apiKey')
+    token = request.args.get('token')
+    if not api_key or not token:
+        return jsonify({'error': 'Missing apiKey or token'}), 400
+    url = f'https://api.trello.com/1/tokens/{token}/webhooks?key={api_key}'
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        try:
+            err = resp.json()
+            msg = err.get('message', 'Failed to fetch webhooks')
+        except Exception:
+            msg = resp.text
+        return jsonify({'error': msg}), 400
+    return jsonify(resp.json()), 200
+
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True) 
+    host = os.getenv('FLASK_RUN_HOST', '127.0.0.1')
+    port = int(os.getenv('FLASK_RUN_PORT', 5000))
+    debug = os.getenv('FLASK_DEBUG', 'False').lower() in ['true', '1', 'yes']
+    app.run(host=host, port=port, debug=debug)

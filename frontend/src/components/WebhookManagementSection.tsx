@@ -34,13 +34,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
   const eventTypes = [
     'Mentioned in a card',
-    'Added to a card',
-    'Card moved',
-    'Card assigned',
-    'Card due date changed',
-    'Card completed',
-    'Comment added',
-    'Attachment added'
+    'Added to a card'
   ];
 
   const labels = ['High Priority', 'Bug', 'Feature', 'Documentation', 'Review'];
@@ -81,33 +75,35 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       }
       boardsToRegister = [boardObj];
     }
-      const callbackURL = TRELLO_WEBHOOK_CALLBACK_URL;  
+    const callbackURL = TRELLO_WEBHOOK_CALLBACK_URL;
     let anySuccess = false;
     for (const boardObj of boardsToRegister) {
       try {
-        const response = await fetch(`https://api.trello.com/1/tokens/${token}/webhooks/`, {
+        // Register webhook via backend (will reuse if exists)
+        const response = await fetch(`${API_BASE_URL}/trello/webhooks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            key: apiKey,
+            apiKey: apiKey,
+            token: token,
             callbackURL,
             idModel: boardObj.id,
             description: `Webhook for ${selectedEvent} on ${boardObj.name}`
           })
         });
-        if (!response.ok) {
+        if (!response.ok && response.status !== 200 && response.status !== 201) {
           let errMsg = 'Failed to register webhook';
           const contentType = response.headers.get('content-type');
           if (contentType && contentType.includes('application/json')) {
             const err = await response.json();
-            errMsg = err.message || errMsg;
+            errMsg = err.error || errMsg;
           } else {
             errMsg = await response.text();
           }
           throw new Error(errMsg);
         }
         const webhookData = await response.json();
-        // Save webhook settings to backend
+        // Always save a new WebhookSetting for each event/config
         await fetch(`${API_BASE_URL}/webhook-settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -168,7 +164,12 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
   const handleDeleteWebhook = async (webhookId: string) => {
     try {
-      await fetch(`${API_BASE_URL}/webhook-settings/${webhookId}`, { method: 'DELETE' });
+      console.log(webhookId);
+      const resp = await fetch(`${API_BASE_URL}/webhook-settings/${webhookId}`, { method: 'DELETE' });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || err.message || 'Failed to delete webhook');
+      }
       setWebhooks(prev => prev.filter(w => w.id !== webhookId));
       toast({
         title: 'Webhook deleted',
@@ -193,16 +194,16 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       return;
     }
     try {
-      const response = await fetch(`https://api.trello.com/1/tokens/${token}/webhooks?key=${apiKey}`);
+      const response = await fetch(`${API_BASE_URL}/trello/webhooks?apiKey=${encodeURIComponent(apiKey)}&token=${encodeURIComponent(token)}`);
       if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.message || 'Failed to fetch webhooks');
+        throw new Error(err.error || 'Failed to fetch webhooks');
       }
       const data = await response.json();
-      setWebhooks(data.map((wh: any) => ({
+      setWebhooks((data || []).map((wh: any) => ({
         id: wh.id,
         event: wh.description, // Trello doesn't store your custom event, so use description
-        board: trelloBoards.find(b => b.id === wh.idModel)?.name || wh.idModel,     // You may want to resolve this to a board name
+        board: trelloBoards.find(b => b.id === wh.idModel)?.name || wh.idModel,
         status: wh.active ? 'active' : 'inactive'
       })));
     } catch (err: any) {
