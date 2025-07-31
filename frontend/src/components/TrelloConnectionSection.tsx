@@ -15,6 +15,7 @@ interface TrelloConnectionSectionProps {
   setApiKey: (key: string) => void;
   token: string;
   setToken: (token: string) => void;
+  userEmail: string;
 }
 
 export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = ({
@@ -22,7 +23,8 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
   apiKey,
   setApiKey,
   token,
-  setToken
+  setToken,
+  userEmail
 }) => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [boards, setBoards] = useState([]);
@@ -41,25 +43,33 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
     setIsConnecting(true);
 
     try {
+      // @ts-ignore
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+      
+
+      
+      // Link Trello credentials to user
+      await fetch(`${API_BASE_URL}/users/trello`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, token }),
+        credentials: 'include',
+      });
       // Verify credentials by calling backend
       const verifyRes = await fetch(`${API_BASE_URL}/trello/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey, token })
+        credentials: 'include',
       });
       if (!verifyRes.ok) {
         const err = await verifyRes.json();
         throw new Error(err.error || "Invalid API Key or Token");
       }
-      const user = await verifyRes.json();
-      const userEmail = user.email || user.username || user.id;
-
       // Fetch boards and lists from backend
       const boardsRes = await fetch(`${API_BASE_URL}/trello/boards`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey, token })
+        credentials: 'include',
       });
       if (!boardsRes.ok) {
         const err = await boardsRes.json();
@@ -67,21 +77,19 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
       }
       const boardsData = await boardsRes.json();
       const boardsWithLists = boardsData.boards || [];
-
       setBoards(boardsWithLists);
       onConnectionSuccess(boardsWithLists);
       setIsConnecting(false);
-
       toast({
         title: "Successfully connected!",
         description: `Found ${boardsWithLists.length} Trello boards`,
       });
-
-      // Call backend to setup board and lists if not already present
+      // Call backend to setup board and lists if not already present (now only needs email)
       const setupRes = await fetch(`${API_BASE_URL}/trello/setup-board`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: userEmail, apiKey, token })
+        body: JSON.stringify({ email: userEmail }),
+        credentials: 'include',
       });
       const setupData = await setupRes.json();
       if (setupRes.ok && setupData.board) {

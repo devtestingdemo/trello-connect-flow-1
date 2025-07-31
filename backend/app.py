@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from db import db, User, WebhookSetting, UserBoard
+from db import db, User, WebhookSetting, UserBoard, TrelloWebhook, TrelloWebhookSetting
 from redis import Redis
 from rq import Queue
 from tasks import process_trello_event
@@ -9,11 +9,71 @@ import os
 from app_factory import create_app
 import requests
 import json
+from flask_migrate import Migrate
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 app, q = create_app()
+migrate = Migrate(app, db)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
 
+# Remove UserLogin class, use User directly
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(user_id)
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    return jsonify({'error': 'Unauthorized'}), 401
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.json
+    email = data.get('email')
+    user = User.query.get(email)
+    if not user:
+        user = User(email=email, apiKey='', token='')  # Empty Trello fields
+        db.session.add(user)
+        db.session.commit()
+    login_user(user)
+    return jsonify({'message': 'Logged in', 'email': user.email}), 200
+
+@app.route('/api/logout', methods=['POST'])
+@login_required
+def logout():
+    logout_user()
+    return jsonify({'message': 'Logged out'}), 200
+
+
+
+@app.route('/api/users/trello', methods=['POST'])
+@login_required
+def link_trello():
+
+    data = request.json
+    api_key = data.get('apiKey')
+    token = data.get('token')
+    user = current_user
+    if not api_key or not token:
+        return jsonify({'error': 'Missing Trello API key or token'}), 400
+    user.apiKey = api_key
+    user.token = token
+    db.session.commit()
+    return jsonify({'message': 'Trello account linked'}), 200
+
+
+def upsert_trello_webhook_setting(webhook_id, event_type, enabled=True, extra_config=None):
+    tws = TrelloWebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=event_type).first()
+    if tws:
+        tws.enabled = enabled
+        tws.extra_config = extra_config
+    else:
+        tws = TrelloWebhookSetting(webhook_id=webhook_id, event_type=event_type, enabled=enabled, extra_config=extra_config)
+        db.session.add(tws)
+    db.session.commit()
+    return tws
 
 
 @app.route('/api/users', methods=['POST'])
@@ -48,19 +108,19 @@ def get_users():
     return jsonify([u.to_dict() for u in users]), 200
 
 @app.route('/api/webhook-settings', methods=['POST'])
+@login_required
 def save_webhook_setting():
     data = request.json
-    user_email = data.get('user_email')
     board_id = data.get('board_id')
     board_name = data.get('board_name')
     event_type = data.get('event_type')
     label = data.get('label')
     list_name = data.get('list_name')
     webhook_id = data.get('webhook_id')
-    if not user_email or not webhook_id:
+    if not webhook_id:
         return jsonify({'error': 'Missing required fields'}), 400
     setting = WebhookSetting(
-        user_email=user_email,
+        user_email=current_user.email,
         board_id=board_id,
         board_name=board_name,
         event_type=event_type,
@@ -72,146 +132,209 @@ def save_webhook_setting():
     db.session.commit()
     return jsonify({'message': 'Webhook setting saved', 'setting': setting.to_dict()}), 201
 
-@app.route('/api/webhook-settings/<webhook_id>', methods=['DELETE'])
-def delete_webhook_setting(webhook_id):
-    setting = WebhookSetting.query.filter_by(webhook_id=webhook_id).first()
+@app.route('/api/webhook-settings/<setting_id>', methods=['DELETE'])
+@login_required
+def delete_webhook_setting(setting_id):
+    # First try to find by setting ID (for individual event deletion)
+    setting = WebhookSetting.query.filter_by(id=setting_id, user_email=current_user.email).first()
+    
     if not setting:
-        return jsonify({'error': 'Webhook setting not found'}), 404
-    # Remove webhook from Trello
-    user = User.query.filter_by(email=setting.user_email).first()
-    if user:
-        trello_delete_url = f"https://api.trello.com/1/webhooks/{webhook_id}?key={user.apiKey}&token={user.token}"
-        try:
-            trello_resp = requests.delete(trello_delete_url)
-            if trello_resp.status_code not in [200, 204]:
-                print(f"Failed to delete Trello webhook: {trello_resp.text}")
-        except Exception as e:
-            print(f"Exception while deleting Trello webhook: {e}")
-    db.session.delete(setting)
-    db.session.commit()
+        # If not found by ID, try by webhook_id (for webhook-level deletion)
+        setting = WebhookSetting.query.filter_by(webhook_id=setting_id, user_email=current_user.email).first()
+    
+    if setting:
+        webhook_id = setting.webhook_id
+        db.session.delete(setting)
+        db.session.commit()
+        
+        # Check if this was the last setting for this webhook
+        remaining_settings = WebhookSetting.query.filter_by(webhook_id=webhook_id).count()
+        if remaining_settings == 0:
+            # Delete the Trello webhook if no more settings exist
+            if current_user.apiKey and current_user.token:
+                trello_delete_url = f"https://api.trello.com/1/webhooks/{webhook_id}?key={current_user.apiKey}&token={current_user.token}"
+                try:
+                    trello_resp = requests.delete(trello_delete_url)
+                    if trello_resp.status_code not in [200, 204]:
+                        print(f"Failed to delete Trello webhook: {trello_resp.text}")
+                    else:
+                        print(f"Successfully deleted Trello webhook: {webhook_id}")
+                except Exception as e:
+                    print(f"Exception while deleting Trello webhook: {e}")
+    
     return jsonify({'message': 'Webhook setting deleted'}), 200
 
+@app.route('/api/test-worker', methods=['POST'])
+def test_worker():
+    """Test endpoint to verify worker is processing tasks"""
+    def test_task():
+        print("[Worker] Test task executed successfully!")
+        return "Test completed"
+    
+    job = q.enqueue(test_task)
+    print(f"Test task queued with job ID: {job.id}")
+    return jsonify({'message': 'Test task queued', 'job_id': job.id}), 200
+
+@app.route('/api/debug/webhooks', methods=['GET'])
+def debug_webhooks():
+    """Debug endpoint to check webhook settings in database"""
+    trello_webhooks = TrelloWebhook.query.all()
+    trello_webhook_settings = TrelloWebhookSetting.query.all()
+    webhook_settings = WebhookSetting.query.all()
+    
+    return jsonify({
+        'trello_webhooks': [{'board_id': w.board_id, 'webhook_id': w.webhook_id} for w in trello_webhooks],
+        'trello_webhook_settings': [{'webhook_id': s.webhook_id, 'event_type': s.event_type, 'enabled': s.enabled} for s in trello_webhook_settings],
+        'webhook_settings': [{'webhook_id': s.webhook_id, 'event_type': s.event_type, 'user_email': s.user_email} for s in webhook_settings]
+    }), 200
+
+@app.route('/api/fix-webhook-settings', methods=['POST'])
+def fix_webhook_settings():
+    """Fix missing TrelloWebhookSetting records for existing webhooks"""
+    try:
+        # Get all webhook settings that don't have corresponding TrelloWebhookSetting records
+        webhook_settings = WebhookSetting.query.all()
+        created_count = 0
+        
+        for ws in webhook_settings:
+            # Check if TrelloWebhookSetting already exists
+            existing = TrelloWebhookSetting.query.filter_by(
+                webhook_id=ws.webhook_id, 
+                event_type=ws.event_type
+            ).first()
+            
+            if not existing:
+                # Create missing TrelloWebhookSetting
+                tws = TrelloWebhookSetting(
+                    webhook_id=ws.webhook_id,
+                    event_type=ws.event_type,
+                    enabled=True,
+                    extra_config={
+                        'label': ws.label,
+                        'list_name': ws.list_name
+                    }
+                )
+                db.session.add(tws)
+                created_count += 1
+        
+        db.session.commit()
+        return jsonify({
+            'message': f'Created {created_count} missing TrelloWebhookSetting records',
+            'created_count': created_count
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/webhook-settings', methods=['GET'])
+@login_required
 def get_webhook_settings():
-    settings = WebhookSetting.query.all()
+    settings = WebhookSetting.query.filter_by(user_email=current_user.email).all()
     return jsonify([s.to_dict() for s in settings]), 200
 
 @app.route('/api/trello-webhook', methods=['GET', 'POST'])
 def trello_webhook():
+    print("=== WEBHOOK ENDPOINT CALLED ===")
     try:
-        print(f"trello_webhook ::")
+        print(f"trello_webhook :: Method: {request.method}")
         if request.method in ['GET', 'HEAD']:
+            print(f"trello_webhook :: Returning 200 for GET/HEAD request")
             return '', 200
         if request.method == 'POST':
+            print(f"trello_webhook :: Received POST request")
+            print(f"trello_webhook :: Headers: {dict(request.headers)}")
+            print(f"trello_webhook :: Content-Type: {request.content_type}")
             if not request.is_json:
+                print(f"trello_webhook :: Not JSON content type, returning 415")
                 return jsonify({'error': 'Content-Type must be application/json'}), 415
             payload = request.get_json(silent=True)
-            #print("trello_webhook :: payload ::",payload)
+            print(f"trello_webhook :: Payload keys: {list(payload.keys()) if payload else 'None'}")
             if not payload:
+                print(f"trello_webhook :: No payload, returning success")
                 return jsonify({'success': True}), 200
             if 'action' not in payload:
+                print(f"trello_webhook :: No action in payload, returning 400")
                 return jsonify({'error': 'Invalid webhook payload'}), 400
             event_type = payload['action'].get('type')
             print(f"trello_webhook :: event_type :: {event_type}")
 
-            # --- NEW CODE STARTS HERE ---
-            webhook_id = payload.get('webhook', {}).get('id')
-            if not webhook_id:
-                return jsonify({'error': 'Missing webhook_id'}), 400
+            # Extract board_id from payload
+            board_id = None
+            if 'data' in payload['action'] and 'board' in payload['action']['data']:
+                board_id = payload['action']['data']['board'].get('id')
+            print(f"trello_webhook :: Extracted board_id: {board_id}")
+            if not board_id:
+                print(f"trello_webhook :: Missing board_id in payload")
+                return jsonify({'error': 'Missing board_id in payload'}), 400
 
-            setting = WebhookSetting.query.filter_by(webhook_id=webhook_id).first()
-            #print(f"trello_webhook :: {setting.__annotations__}")
-            if not setting:
-                return jsonify({'error': 'Invalid webhook_id'}), 404
+            # Look up TrelloWebhook for this board
+            trello_webhook = TrelloWebhook.query.filter_by(board_id=board_id).first()
+            print(f"trello_webhook :: Found TrelloWebhook: {trello_webhook is not None}")
+            if not trello_webhook:
+                print(f"trello_webhook :: No webhook registered for board {board_id}")
+                return jsonify({'error': 'No webhook registered for this board'}), 404
+            webhook_id = trello_webhook.webhook_id
+            print(f"trello_webhook :: Using webhook_id: {webhook_id}")
 
-            # Get all event_types for this user and webhook
-            allowed_event_types = [
-                "commentCard" if s.event_type == "Mentioned in a card" else (
-                    "addMemberToCard" if s.event_type == "Added to a card" else s.event_type
-                )
-                for s in WebhookSetting.query.filter_by(
-                    user_email=setting.user_email,
-                    webhook_id=webhook_id
-                ).all()
-            ]
-            print(f"Allowed event types for webhook {webhook_id}: {allowed_event_types}")
-            # --- NEW CODE ENDS HERE ---
-
-            if event_type not in allowed_event_types:
-                return jsonify({'status': 'ignored', 'reason': f'Event type {event_type} not handled'}), 200
-
+            # Look up event_type in TrelloWebhookSetting
+            # Map Trello event types to our custom event types
+            mapped_event_type = None
             if event_type == "commentCard":
-                # Fetch the user
-                user = User.query.filter_by(email=setting.user_email).first()
-                trello_username = None
-                if user:
-                    import requests
-                    url = f"https://api.trello.com/1/members/me?key={user.apiKey}&token={user.token}"
-                    try:
-                        resp = requests.get(url)
-                        if resp.status_code == 200:
-                            trello_username = resp.json().get("username")
-                    except Exception as e:
-                        print(f"Error fetching Trello username: {e}")
-                comment_text = payload.get('action', {}).get('data', {}).get('text', '')
-                if not trello_username or f"@{trello_username}" not in comment_text:
-                    print("User not mentioned in comment, skipping queue.")
-                    return jsonify({'status': 'ignored', 'reason': 'User not mentioned in comment'}), 200
+                mapped_event_type = "Mentioned in a card"
+            elif event_type == "addMemberToCard":
+                mapped_event_type = "Added to a card"
+            else:
+                mapped_event_type = event_type  # Use as-is for other events
+            
+            print(f"trello_webhook :: Mapped event_type: {event_type} -> {mapped_event_type}")
+            
+            setting = TrelloWebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=mapped_event_type).first()
+            print(f"trello_webhook :: Found TrelloWebhookSetting: {setting is not None}")
+            if setting:
+                print(f"trello_webhook :: TrelloWebhookSetting enabled: {setting.enabled}")
+            if not setting or not setting.enabled:
+                print(f"trello_webhook :: Event type {mapped_event_type} not enabled or not found")
+                return jsonify({'status': 'ignored', 'reason': f'Event type {mapped_event_type} not enabled'}), 200
 
-            q.enqueue(process_trello_event, payload)
-            return jsonify({'status': 'queued', 'event_type': event_type}), 200
+            # Get all user preferences for this webhook and event type
+            user_settings = WebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=mapped_event_type).all()
+            print(f"trello_webhook :: Found {len(user_settings)} user settings for event {mapped_event_type}")
+            
+            if not user_settings:
+                print(f"trello_webhook :: No user settings found for event type {mapped_event_type}")
+                return jsonify({'status': 'ignored', 'reason': f'No user settings found for event type {mapped_event_type}'}), 200
+
+            # Process event for each user who has settings for this event
+            for user_setting in user_settings:
+                print(f"trello_webhook :: Processing for user {user_setting.user_email}")
+                # Add user-specific context to the payload
+                enriched_payload = {
+                    'trello_event': payload,
+                    'user_email': user_setting.user_email,
+                    'board_id': user_setting.board_id,
+                    'board_name': user_setting.board_name,
+                    'event_type': user_setting.event_type,
+                    'label': user_setting.label,
+                    'list_name': user_setting.list_name
+                }
+                print(f"trello_webhook :: Enqueuing task for user {user_setting.user_email}")
+                q.enqueue(process_trello_event, enriched_payload)
+            
+            print(f"trello_webhook :: Queued {len(user_settings)} tasks for event {mapped_event_type}")
+            return jsonify({'status': 'queued', 'event_type': mapped_event_type, 'users_processed': len(user_settings)}), 200
     except Exception as e:
         print(f"trello_webhook :: {e}");
         return jsonify({'status': 'failed', 'error': str(e)});
 
-@app.route('/api/trello/setup-board', methods=['POST'])
-def setup_trello_board():
-    data = request.json
-    email = data.get('email')
-    api_key = data.get('apiKey')
-    token = data.get('token')
-    # Use username from email as board name
-    board_name = email.split('@')[0] if email and '@' in email else 'Integration Board'
-    if not email or not api_key or not token:
-        return jsonify({'error': 'Missing required fields'}), 400
-    # Check if board already exists for user
-    user_board = UserBoard.query.filter_by(user_email=email).first()
-    if user_board:
-        return jsonify({'message': 'Board already exists', 'board': user_board.to_dict()}), 200
-    # Create board via Trello API
-    board_res = requests.post(
-        f'https://api.trello.com/1/boards/',
-        params={'name': board_name, 'defaultLists': 'false', 'key': api_key, 'token': token}
-    )
-    if board_res.status_code != 200:
-        return jsonify({'error': 'Failed to create board', 'details': board_res.text}), 500
-    board = board_res.json()
-    board_id = board['id']
-    # Create required lists
-    list_names = ['Enquiry In', 'Todo', 'Doing', 'Done']
-    lists = {}
-    for name in list_names:
-        list_res = requests.post(
-            f'https://api.trello.com/1/lists',
-            params={'name': name, 'idBoard': board_id, 'key': api_key, 'token': token}
-        )
-        if list_res.status_code != 200:
-            return jsonify({'error': f'Failed to create list {name}', 'details': list_res.text}), 500
-        list_data = list_res.json()
-        lists[name] = list_data['id']
-    # Save to DB
-    user_board = UserBoard(user_email=email, board_id=board_id, board_name=board_name, lists=lists)
-    db.session.add(user_board)
-    db.session.commit()
-    return jsonify({'message': 'Board created', 'board': user_board.to_dict()}), 201
-
+# Update Trello-related endpoints to check for Trello credentials
 @app.route('/api/trello/verify', methods=['POST'])
+@login_required
 def trello_verify():
-    data = request.json
-    api_key = data.get('apiKey')
-    token = data.get('token')
-    if not api_key or not token:
-        return jsonify({'error': 'Missing apiKey or token'}), 400
+
+    user = current_user
+    if not user.apiKey or not user.token:
+        return jsonify({'error': 'Trello not linked'}), 400
+    api_key = user.apiKey
+    token = user.token
     url = f'https://api.trello.com/1/members/me?key={api_key}&token={token}'
     resp = requests.get(url)
     if resp.status_code != 200:
@@ -219,18 +342,18 @@ def trello_verify():
     return jsonify(resp.json()), 200
 
 @app.route('/api/trello/boards', methods=['POST'])
+@login_required
 def trello_get_boards():
-    data = request.json
-    api_key = data.get('apiKey')
-    token = data.get('token')
-    if not api_key or not token:
-        return jsonify({'error': 'Missing apiKey or token'}), 400
+    user = current_user
+    if not user.apiKey or not user.token:
+        return jsonify({'error': 'Trello not linked'}), 400
+    api_key = user.apiKey
+    token = user.token
     boards_url = f'https://api.trello.com/1/members/me/boards?key={api_key}&token={token}'
     boards_resp = requests.get(boards_url)
     if boards_resp.status_code != 200:
         return jsonify({'error': 'Failed to fetch boards', 'details': boards_resp.text}), 400
     boards_data = boards_resp.json()
-    # For each board, fetch its lists
     boards_with_lists = []
     for board in boards_data:
         lists_url = f'https://api.trello.com/1/boards/{board["id"]}/lists?key={api_key}&token={token}'
@@ -244,34 +367,39 @@ def trello_get_boards():
     return jsonify({'boards': boards_with_lists}), 200
 
 @app.route('/api/trello/webhooks', methods=['POST'])
+@login_required
 def trello_register_webhook():
     data = request.json
-    api_key = data.get('apiKey')
-    token = data.get('token')
     callback_url = data.get('callbackURL')
-    id_model = data.get('idModel')
+    board_id = data.get('idModel')
     description = data.get('description', '')
-    if not api_key or not token or not callback_url or not id_model:
+    event_settings = data.get('eventSettings', [])
+    if not callback_url or not board_id:
         return jsonify({'error': 'Missing required fields'}), 400
-
-    # Check if a Trello webhook already exists for this token/model
-    trello_webhooks_resp = requests.get(f'https://api.trello.com/1/tokens/{token}/webhooks?key={api_key}')
-    if trello_webhooks_resp.status_code == 200:
-        trello_webhooks = trello_webhooks_resp.json()
-        existing = next((wh for wh in trello_webhooks if wh.get('idModel') == id_model and wh.get('callbackURL') == callback_url), None)
-        if existing:
-            # Webhook already exists, reuse it
-            return jsonify(existing), 200
-
-    # Otherwise, create a new Trello webhook
-    url = f'https://api.trello.com/1/tokens/{token}/webhooks/'
+    user = current_user
+    if not user.apiKey or not user.token:
+        return jsonify({'error': 'Trello not linked'}), 400
+    api_key = user.apiKey
+    token = user.token
+    trello_webhook = TrelloWebhook.query.filter_by(board_id=board_id).first()
+    if trello_webhook:
+        webhook_id = trello_webhook.webhook_id
+        for setting in event_settings:
+            event_type = setting.get('event_type')
+            enabled = setting.get('enabled', True)
+            extra_config = setting.get('extra_config')
+            upsert_trello_webhook_setting(webhook_id, event_type, enabled, extra_config)
+        db.session.commit()
+        return jsonify({'message': 'Webhook already exists, settings updated', 'id': webhook_id}), 200
+    url = f'https://api.trello.com/1/webhooks'
     payload = {
         'key': api_key,
+        'token': token,
         'callbackURL': callback_url,
-        'idModel': id_model,
+        'idModel': board_id,
         'description': description
     }
-    resp = requests.post(url, json=payload)
+    resp = requests.post(url, data=payload)
     if resp.status_code not in [200, 201]:
         try:
             err = resp.json()
@@ -279,14 +407,27 @@ def trello_register_webhook():
         except Exception:
             msg = resp.text
         return jsonify({'error': msg}), 400
-    return jsonify(resp.json()), 201
+    webhook_data = resp.json()
+    webhook_id = webhook_data.get('id')
+    trello_webhook = TrelloWebhook(board_id=board_id, webhook_id=webhook_id, callback_url=callback_url)
+    db.session.add(trello_webhook)
+    db.session.commit()
+    for setting in event_settings:
+        event_type = setting.get('event_type')
+        enabled = setting.get('enabled', True)
+        extra_config = setting.get('extra_config')
+        upsert_trello_webhook_setting(webhook_id, event_type, enabled, extra_config)
+    db.session.commit()
+    return jsonify({'message': 'Webhook registered and settings saved', 'id': webhook_id}), 201
 
 @app.route('/api/trello/webhooks', methods=['GET'])
+@login_required
 def trello_get_webhooks():
-    api_key = request.args.get('apiKey')
-    token = request.args.get('token')
-    if not api_key or not token:
-        return jsonify({'error': 'Missing apiKey or token'}), 400
+    user = current_user
+    if not user.apiKey or not user.token:
+        return jsonify({'error': 'Trello not linked'}), 400
+    api_key = user.apiKey
+    token = user.token
     url = f'https://api.trello.com/1/tokens/{token}/webhooks?key={api_key}'
     resp = requests.get(url)
     if resp.status_code != 200:
@@ -297,6 +438,48 @@ def trello_get_webhooks():
             msg = resp.text
         return jsonify({'error': msg}), 400
     return jsonify(resp.json()), 200
+
+@app.route('/api/trello/setup-board', methods=['POST'])
+@login_required
+def setup_trello_board():
+    user = current_user
+    if not user.apiKey or not user.token:
+        return jsonify({'error': 'Trello not linked'}), 400
+    api_key = user.apiKey
+    token = user.token
+    board_name = user.email.split('@')[0] if user.email and '@' in user.email else 'Integration Board'
+    user_board = UserBoard.query.filter_by(user_email=user.email).first()
+    if user_board:
+        return jsonify({'message': 'Board already exists', 'board': user_board.to_dict()}), 200
+    board_res = requests.post(
+        f'https://api.trello.com/1/boards/',
+        params={'name': board_name, 'defaultLists': 'false', 'key': api_key, 'token': token}
+    )
+    if board_res.status_code != 200:
+        return jsonify({'error': 'Failed to create board', 'details': board_res.text}), 500
+    board = board_res.json()
+    board_id = board['id']
+    list_names = ['Enquiry In', 'Todo', 'Doing', 'Done']
+    lists = {}
+    for name in list_names:
+        list_res = requests.post(
+            f'https://api.trello.com/1/lists',
+            params={'name': name, 'idBoard': board_id, 'key': api_key, 'token': token}
+        )
+        if list_res.status_code != 200:
+            return jsonify({'error': f'Failed to create list {name}', 'details': list_res.text}), 500
+        list_data = list_res.json()
+        lists[name] = list_data['id']
+    user_board = UserBoard(user_email=user.email, board_id=board_id, board_name=board_name, lists=lists)
+    db.session.add(user_board)
+    db.session.commit()
+    return jsonify({'message': 'Board created', 'board': user_board.to_dict()}), 201
+
+@app.route('/admin/clear-db', methods=['POST'])
+def clear_db():
+    db.drop_all()
+    db.create_all()
+    return "Database cleared!", 200
 
 
 if __name__ == '__main__':

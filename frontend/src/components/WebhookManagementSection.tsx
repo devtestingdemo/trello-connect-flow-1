@@ -10,19 +10,20 @@ import { Separator } from "@/components/ui/separator";
 import { Webhook, Play, Square, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
+// Fix for Vite env typing
+// @ts-ignore
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const TRELLO_WEBHOOK_CALLBACK_URL = `${API_BASE_URL}/trello-webhook`;
+
 interface WebhookManagementSectionProps {
   trelloBoards: any[];
   trelloConnected: boolean;
-  apiKey: string;
-  token: string;
   userEmail: string;
 }
 
 export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> = ({
   trelloBoards,
   trelloConnected,
-  apiKey,
-  token,
   userEmail
 }) => {
   const [selectedEvent, setSelectedEvent] = useState('');
@@ -38,9 +39,6 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
   ];
 
   const labels = ['High Priority', 'Bug', 'Feature', 'Documentation', 'Review'];
-
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-  const TRELLO_WEBHOOK_CALLBACK_URL = `${API_BASE_URL}/trello-webhook`;
   
   const handleRegisterWebhook = async () => {
     if (!selectedEvent) {
@@ -51,10 +49,10 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       });
       return;
     }
-    if (!apiKey || !token) {
+    if (!userEmail) {
       toast({
-        title: "Missing Trello credentials",
-        description: "Please connect Trello and provide API Key & Token.",
+        title: "Missing user email",
+        description: "Please log in to register webhooks.",
         variant: "destructive"
       });
       return;
@@ -83,12 +81,19 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
         const response = await fetch(`${API_BASE_URL}/trello/webhooks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({
-            apiKey: apiKey,
-            token: token,
             callbackURL,
             idModel: boardObj.id,
-            description: `Webhook for ${selectedEvent} on ${boardObj.name}`
+            description: `Webhook for ${selectedEvent} on ${boardObj.name}`,
+            eventSettings: [{
+              event_type: selectedEvent,
+              enabled: true,
+              extra_config: {
+                label: selectedLabel,
+                list_name: selectedList
+              }
+            }]
           })
         });
         if (!response.ok && response.status !== 200 && response.status !== 201) {
@@ -103,12 +108,21 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
           throw new Error(errMsg);
         }
         const webhookData = await response.json();
+        if (!webhookData.id) {
+          console.error('No webhook_id returned from /trello/webhooks:', webhookData);
+          toast({
+            title: 'Webhook registration failed',
+            description: 'No webhook_id returned from backend. Please try again or contact support.',
+            variant: 'destructive'
+          });
+          continue;
+        }
         // Always save a new WebhookSetting for each event/config
         await fetch(`${API_BASE_URL}/webhook-settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({
-            user_email: userEmail,
             board_id: boardObj.id,
             board_name: boardObj.name,
             event_type: selectedEvent,
@@ -164,16 +178,22 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
   const handleDeleteWebhook = async (webhookId: string) => {
     try {
-      console.log(webhookId);
-      const resp = await fetch(`${API_BASE_URL}/webhook-settings/${webhookId}`, { method: 'DELETE' });
+      console.log('Deleting webhook:', webhookId);
+      const resp = await fetch(`${API_BASE_URL}/webhook-settings/${webhookId}`, { 
+        method: 'DELETE',
+        credentials: 'include'
+      });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.error || err.message || 'Failed to delete webhook');
       }
-      setWebhooks(prev => prev.filter(w => w.id !== webhookId));
+      
+      // Refresh webhooks to update the display
+      await fetchWebhooks();
+      
       toast({
         title: 'Webhook deleted',
-        description: `Webhook ${webhookId} has been deleted.`,
+        description: `Webhook setting has been deleted.`,
       });
     } catch (err: any) {
       toast({
@@ -185,42 +205,75 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
   };
 
   const fetchWebhooks = async () => {
-    if (!apiKey || !token) {
+    if (!userEmail) {
       toast({
-        title: "Missing Trello credentials",
-        description: "Please connect Trello and provide API Key & Token.",
+        title: "Missing user email",
+        description: "Please log in to fetch webhooks.",
         variant: "destructive"
       });
       return;
     }
     try {
-      const response = await fetch(`${API_BASE_URL}/trello/webhooks?apiKey=${encodeURIComponent(apiKey)}&token=${encodeURIComponent(token)}`);
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to fetch webhooks');
+      // Fetch user's webhook settings from our database
+      const response = await fetch(`${API_BASE_URL}/webhook-settings`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include'
+      });
+      const contentType = response.headers.get('content-type');
+      let data;
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        data = await response.text();
+        throw new Error(`Unexpected response: ${data}`);
       }
-      const data = await response.json();
-      setWebhooks((data || []).map((wh: any) => ({
-        id: wh.id,
-        event: wh.description, // Trello doesn't store your custom event, so use description
-        board: trelloBoards.find(b => b.id === wh.idModel)?.name || wh.idModel,
-        status: wh.active ? 'active' : 'inactive'
-      })));
+      
+      // Group settings by webhook_id to show multiple events per webhook
+      const webhookGroups = {};
+      (data || []).forEach((setting: any) => {
+        if (!webhookGroups[setting.webhook_id]) {
+          webhookGroups[setting.webhook_id] = {
+            id: setting.webhook_id,
+            board: setting.board_name,
+            board_id: setting.board_id,
+            events: []
+          };
+        }
+        webhookGroups[setting.webhook_id].events.push({
+          id: setting.id,
+          event_type: setting.event_type,
+          label: setting.label,
+          list_name: setting.list_name,
+          status: 'active'
+        });
+      });
+      
+      // Convert to array format for display
+      const groupedWebhooks = Object.values(webhookGroups).map((group: any) => ({
+        id: group.id,
+        board: group.board,
+        board_id: group.board_id,
+        events: group.events,
+        status: 'active'
+      }));
+      
+      setWebhooks(groupedWebhooks);
     } catch (err: any) {
       toast({
         title: "Failed to fetch webhooks",
-        description: err.message || 'Could not fetch webhooks from Trello.',
+        description: err.message || 'Could not fetch webhook settings.',
         variant: "destructive"
       });
     }
   };
 
   useEffect(() => {
-    if (apiKey && token) {
+    if (userEmail) {
       fetchWebhooks();
     }
     // eslint-disable-next-line
-  }, [apiKey, token]);
+  }, [userEmail]);
 
   if (!trelloConnected) {
     return (
@@ -372,23 +425,52 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
             <p className="text-gray-500 text-center py-4">No webhooks registered yet</p>
           ) : (
             <div className="space-y-3">
-              {webhooks.map((webhook) => (
-                <div key={webhook.id} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <Badge 
-                      variant={webhook.status === 'active' ? 'default' : 'secondary'}
-                      className={webhook.status === 'active' ? 'bg-green-500' : ''}
-                    >
-                      {webhook.status}
-                    </Badge>
-                    <div>
-                      <p className="font-medium">{webhook.event}</p>
-                      <p className="text-sm text-gray-500">{webhook.board}</p>
+              {webhooks.map((webhook, idx) => (
+                <div key={webhook.id || idx} className="border rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center space-x-3">
+                      <Badge 
+                        variant={webhook.status === 'active' ? 'default' : 'secondary'}
+                        className={webhook.status === 'active' ? 'bg-green-500' : ''}
+                      >
+                        {webhook.status}
+                      </Badge>
+                      <div>
+                        <p className="font-medium">Board: {webhook.board}</p>
+                        <p className="text-sm text-gray-500">Webhook ID: {webhook.id}</p>
+                      </div>
                     </div>
+                    <Button variant="ghost" size="sm" onClick={() => handleDeleteWebhook(webhook.id)}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => handleDeleteWebhook(webhook.id)}>
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  
+                  {/* Events for this webhook */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-gray-700">Events:</p>
+                    {webhook.events && webhook.events.map((event: any, eventIdx: number) => (
+                      <div key={eventIdx} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+                        <div>
+                          <p className="text-sm font-medium">{event.event_type}</p>
+                          {(event.label || event.list_name) && (
+                            <p className="text-xs text-gray-500">
+                              {event.label && `Label: ${event.label}`}
+                              {event.label && event.list_name && ' • '}
+                              {event.list_name && `List: ${event.list_name}`}
+                            </p>
+                          )}
+                        </div>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => handleDeleteWebhook(event.id)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>

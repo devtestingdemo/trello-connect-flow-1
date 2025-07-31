@@ -6,3 +6,5 @@ rq
 SQLAlchemy
 flask-sqlalchemy
 python-dotenv
+Flask-Migrate
+Flask-Login

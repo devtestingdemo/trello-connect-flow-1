@@ -13,6 +13,7 @@ import { GoogleAuthSection } from "@/components/GoogleAuthSection";
 import { TrelloConnectionSection } from "@/components/TrelloConnectionSection";
 import { WebhookManagementSection } from "@/components/WebhookManagementSection";
 
+// @ts-ignore
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 const saveUserCredentials = async (email: string, apiKey: string, token: string) => {
@@ -46,6 +47,7 @@ const Index = () => {
   });
   const [trelloConnected, setTrelloConnected] = useState(false);
   const [trelloBoards, setTrelloBoards] = useState([]);
+  // Only keep apiKey/token in state for initial connect
   const [apiKey, setApiKey] = useState('');
   const [token, setToken] = useState('');
 
@@ -59,52 +61,87 @@ const Index = () => {
     }
   }, [isAuthenticated, userEmail]);
 
-  // Load credentials from backend if userEmail is set
-  useEffect(() => {
-    if (userEmail) {
-      getUserCredentials(userEmail)
-        .then((data) => {
-          setApiKey(data.apiKey);
-          setToken(data.token);
-        })
-        .catch(() => {
+  // Session-based login
+  const handleSessionLogin = async (email: string) => {
+    const resp = await fetch(`${API_BASE_URL}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email })
+    });
+    if (!resp.ok) throw new Error('Login failed');
+    setIsAuthenticated(true);
+    setUserEmail(email);
+    
+
+  };
+
+  // Session-based logout
+  const handleSessionLogout = async () => {
+    await fetch(`${API_BASE_URL}/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    setIsAuthenticated(false);
+    setUserEmail('');
+    setApiKey('');
+    setToken('');
+    localStorage.removeItem('isAuthenticated');
+    localStorage.removeItem('userEmail');
+  };
+
+  // After connect, clear apiKey/token from state
+  const handleTrelloConnect = async (boards: any[]) => {
+    setTrelloConnected(true);
+    setTrelloBoards(boards);
           setApiKey('');
           setToken('');
-        });
-    }
-    // eslint-disable-next-line
-  }, [userEmail]);
+    localStorage.removeItem('apiKey');
+    localStorage.removeItem('token');
+  };
 
-  // Automatically connect Trello if apiKey and token are present
+  // After login, check if Trello is linked
   useEffect(() => {
-    const fetchBoards = async () => {
-      if (apiKey && token) {
-        try {
+    const checkTrelloLinked = async () => {
+      if (!isAuthenticated) {
+        setTrelloConnected(false);
+        setTrelloBoards([]);
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE_URL}/trello/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+        });
+        if (res.status === 400) {
+          setTrelloConnected(false);
+          setTrelloBoards([]);
+          return;
+        } else if (res.ok) {
+          setTrelloConnected(true);
+          // Now fetch boards
           const boardsRes = await fetch(`${API_BASE_URL}/trello/boards`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ apiKey, token })
+            credentials: 'include',
           });
           if (!boardsRes.ok) throw new Error('Failed to fetch boards');
           const boardsData = await boardsRes.json();
           const boardsWithLists = boardsData.boards || [];
           setTrelloBoards(boardsWithLists);
-          setTrelloConnected(true);
-        } catch {
-          setTrelloBoards([]);
-          setTrelloConnected(false);
         }
-      } else {
-        setTrelloBoards([]);
+      } catch {
         setTrelloConnected(false);
+        setTrelloBoards([]);
       }
     };
-    fetchBoards();
+    checkTrelloLinked();
     // eslint-disable-next-line
-  }, [apiKey, token]);
+  }, [isAuthenticated]);
 
   // Helper: should show Trello connection UI?
-  const shouldShowTrelloConnect = !trelloConnected;
+  const shouldShowTrelloConnect = isAuthenticated && !trelloConnected;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -125,24 +162,10 @@ const Index = () => {
           <GoogleAuthSection 
             isAuthenticated={isAuthenticated}
             userEmail={userEmail}
-            onAuthSuccess={(email) => {
-              setIsAuthenticated(true);
-              setUserEmail(email);
+            onAuthSuccess={async (email) => {
+              await handleSessionLogin(email);
             }}
-            onSignOut={() => {
-              setIsAuthenticated(false);
-              setUserEmail('');
-              // @ts-ignore: google is injected by Google Identity Services
-              if (window.google && window.google.accounts && window.google.accounts.id) {
-                // @ts-ignore
-                window.google.accounts.id.disableAutoSelect();
-              }
-              setApiKey('');
-              setToken('');
-              // Clear persisted auth state
-              localStorage.removeItem('isAuthenticated');
-              localStorage.removeItem('userEmail');
-            }}
+            onSignOut={handleSessionLogout}
           />
 
           {/* Trello Integration Sections - Only show when authenticated */}
@@ -174,17 +197,8 @@ const Index = () => {
                       setApiKey={setApiKey}
                       token={token}
                       setToken={setToken}
-                      onConnectionSuccess={async (boards) => {
-                        setTrelloConnected(true);
-                        setTrelloBoards(boards);
-                        if (userEmail && apiKey && token) {
-                          try {
-                            await saveUserCredentials(userEmail, apiKey, token);
-                          } catch (e) {
-                            // Optionally handle error
-                          }
-                        }
-                      }}
+                      onConnectionSuccess={handleTrelloConnect}
+                      userEmail={userEmail}
                     />
                   ) : (
                     <div className="text-green-700 font-medium">Trello connection established. You can now register webhooks.</div>
@@ -209,8 +223,6 @@ const Index = () => {
                   <WebhookManagementSection 
                     trelloBoards={trelloBoards}
                     trelloConnected={trelloConnected}
-                    apiKey={apiKey}
-                    token={token}
                     userEmail={userEmail}
                   />
                 </AccordionContent>
