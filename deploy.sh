@@ -54,11 +54,11 @@ fi
 
 # Step 3: Stop existing containers
 print_status "Stopping existing containers..."
-docker-compose -f docker-compose.prod.yml down || true
+docker compose -f docker-compose.prod.yml down || true
 
 # Step 4: Build and start containers
 print_status "Building and starting containers..."
-docker-compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --build
 
 # Step 5: Wait for services to be ready
 print_status "Waiting for services to be ready..."
@@ -66,11 +66,11 @@ sleep 10
 
 # Step 6: Check if services are running
 print_status "Checking service status..."
-if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+if docker compose -f docker-compose.prod.yml ps | grep -q "Up"; then
     print_status "✅ Services are running successfully!"
 else
     print_error "❌ Some services failed to start. Check logs:"
-    docker-compose -f docker-compose.prod.yml logs
+    docker compose -f docker-compose.prod.yml logs
     exit 1
 fi
 
@@ -80,7 +80,7 @@ if curl -s http://localhost:4001/api/users > /dev/null; then
     print_status "✅ API is responding correctly!"
 else
     print_warning "⚠️  API might not be ready yet. Check logs:"
-    docker-compose -f docker-compose.prod.yml logs backend
+    docker compose -f docker-compose.prod.yml logs backend
 fi
 
 print_status "🎉 Deployment completed!"
@@ -93,4 +93,4 @@ echo "4. Test your application at https://boards.norgayhrconsulting.com.au"
 # Show running containers
 echo ""
 print_status "Running containers:"
-docker-compose -f docker-compose.prod.yml ps 
+docker compose -f docker-compose.prod.yml ps 
