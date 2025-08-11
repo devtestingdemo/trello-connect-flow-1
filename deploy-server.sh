@@ -61,6 +61,12 @@ chmod 755 backend/instance
 print_status "Stopping existing containers and cleaning up orphans..."
 docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
+# Force remove any conflicting containers
+print_status "Removing any conflicting containers..."
+docker rm -f boardsnorgayhrconsultingcomau-redis-1 2>/dev/null || true
+docker rm -f boardsnorgayhrconsultingcomau-backend-1 2>/dev/null || true
+docker rm -f boardsnorgayhrconsultingcomau-worker-1 2>/dev/null || true
+
 # Step 5: Build and start containers
 print_status "Building and starting containers..."
 docker compose -f docker-compose.prod.yml up -d --build
