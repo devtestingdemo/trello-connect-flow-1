@@ -21,9 +21,12 @@ def create_app():
     app.config['SESSION_COOKIE_SAMESITE'] = 'None'
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_DOMAIN'] = None  # Allow cross-subdomain cookies
+    # Get frontend URL from environment or use default
+    frontend_url = os.environ.get('FRONTEND_URL', 'https://boards.norgayhrconsulting.com.au')
+    
     CORS(
         app,
-        origins=["http://localhost:3000"],  # or your deployed frontend URL
+        origins=[frontend_url, "http://localhost:3000"],  # Allow both production and development
         supports_credentials=True
     )
     db.init_app(app)

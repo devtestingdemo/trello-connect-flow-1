@@ -1,89 +1,96 @@
 #!/bin/bash
 
-# Configuration
-APP_NAME="trello-connect-flow"
-APP_DIR="/var/www/$APP_NAME"
-BACKEND_DIR="$APP_DIR/backend"
-FRONTEND_DIR="$APP_DIR/frontend"
+# Deployment script for Trello Connect Flow
+set -e
 
-echo "Starting deployment of $APP_NAME..."
+echo "🚀 Starting deployment of Trello Connect Flow..."
 
-# Create application directory
-sudo mkdir -p $APP_DIR
-sudo chown $USER:$USER $APP_DIR
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# Copy application files
-echo "Copying application files..."
-cp -r . $APP_DIR/
+# Function to print colored output
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
 
-# Set up backend
-echo "Setting up backend..."
-cd $BACKEND_DIR
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
 
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up environment variables
-if [ ! -f .env ]; then
-    echo "Creating .env file..."
-    cat > .env << EOF
-FLASK_ENV=production
-FLASK_APP=app.py
-FLASK_RUN_HOST=127.0.0.1
-FLASK_RUN_PORT=5000
-REDIS_PORT=6379
-DATABASE_URL=sqlite:///instance/app.db
-SECRET_KEY=$(openssl rand -hex 32)
-EOF
+# Check if we're in the right directory
+if [ ! -f "docker-compose.yml" ]; then
+    print_error "Please run this script from the project root directory"
+    exit 1
 fi
 
-# Initialize database
-python -c "from app import app, db; app.app_context().push(); db.create_all()"
-
-# Set up frontend
-echo "Setting up frontend..."
-cd $FRONTEND_DIR
-
-# Install dependencies
+# Step 1: Build frontend
+print_status "Building frontend..."
+cd frontend
 npm install
-
-# Build for production
 npm run build
+cd ..
 
-# Set proper permissions
-echo "Setting permissions..."
-sudo chown -R www-data:www-data $APP_DIR
-sudo chmod -R 755 $APP_DIR
+# Step 2: Check if .env.production exists
+if [ ! -f ".env.production" ]; then
+    print_warning ".env.production not found. Creating template..."
+    cat > .env.production << EOF
+FLASK_RUN_HOST=0.0.0.0
+FLASK_RUN_PORT=4001
+REDIS_PORT=6379
+SECRET_KEY=spk-123
+SQLALCHEMY_DATABASE_URI=sqlite:///instance/users.db
+FRONTEND_URL=https://boards.norgayhrconsulting.com.au
+EOF
+    print_warning "Please edit .env.production with your actual values before continuing"
+    exit 1
+fi
 
-# Copy Apache configuration
-echo "Setting up Apache..."
-sudo cp $APP_DIR/apache-config.conf /etc/apache2/sites-available/$APP_NAME.conf
-sudo a2ensite $APP_NAME
-sudo a2dissite 000-default
+# Step 3: Stop existing containers
+print_status "Stopping existing containers..."
+docker-compose -f docker-compose.prod.yml down || true
 
-# Copy systemd services
-echo "Setting up systemd services..."
-sudo cp $APP_DIR/trello-backend.service /etc/systemd/system/
-sudo cp $APP_DIR/trello-worker.service /etc/systemd/system/
+# Step 4: Build and start containers
+print_status "Building and starting containers..."
+docker-compose -f docker-compose.prod.yml up -d --build
 
-# Reload systemd and start services
-sudo systemctl daemon-reload
-sudo systemctl enable trello-backend
-sudo systemctl enable trello-worker
-sudo systemctl start trello-backend
-sudo systemctl start trello-worker
+# Step 5: Wait for services to be ready
+print_status "Waiting for services to be ready..."
+sleep 10
 
-# Restart Apache
-sudo systemctl restart apache2
+# Step 6: Check if services are running
+print_status "Checking service status..."
+if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+    print_status "✅ Services are running successfully!"
+else
+    print_error "❌ Some services failed to start. Check logs:"
+    docker-compose -f docker-compose.prod.yml logs
+    exit 1
+fi
 
-echo "Deployment completed!"
-echo "Backend service status:"
-sudo systemctl status trello-backend --no-pager
-echo "Worker service status:"
-sudo systemctl status trello-worker --no-pager
-echo "Apache status:"
-sudo systemctl status apache2 --no-pager 
+# Step 7: Test API endpoint
+print_status "Testing API endpoint..."
+if curl -s http://localhost:4001/api/users > /dev/null; then
+    print_status "✅ API is responding correctly!"
+else
+    print_warning "⚠️  API might not be ready yet. Check logs:"
+    docker-compose -f docker-compose.prod.yml logs backend
+fi
+
+print_status "🎉 Deployment completed!"
+print_status "Next steps:"
+echo "1. Copy frontend/dist/* to your web server directory"
+echo "2. Configure Apache virtual host (see DEPLOYMENT_GUIDE.md)"
+echo "3. Set up SSL certificate with Let's Encrypt"
+echo "4. Test your application at https://boards.norgayhrconsulting.com.au"
+
+# Show running containers
+echo ""
+print_status "Running containers:"
+docker-compose -f docker-compose.prod.yml ps 
