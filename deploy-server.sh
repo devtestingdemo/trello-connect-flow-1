@@ -63,9 +63,14 @@ docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
 # Force remove any conflicting containers
 print_status "Removing any conflicting containers..."
-docker rm -f boardsnorgayhrconsultingcomau-redis-1 2>/dev/null || true
-docker rm -f boardsnorgayhrconsultingcomau-backend-1 2>/dev/null || true
-docker rm -f boardsnorgayhrconsultingcomau-worker-1 2>/dev/null || true
+# Remove all containers that might conflict with our project
+docker ps -a --filter "name=boardsnorgayhrconsultingcomau" --format "{{.Names}}" | xargs -r docker rm -f
+docker ps -a --filter "name=trello-connect-flow" --format "{{.Names}}" | xargs -r docker rm -f
+
+# Also remove any containers using our ports
+print_status "Checking for port conflicts..."
+docker ps -a --filter "publish=4001" --format "{{.Names}}" | xargs -r docker rm -f
+docker ps -a --filter "publish=6379" --format "{{.Names}}" | xargs -r docker rm -f
 
 # Step 5: Build and start containers
 print_status "Building and starting containers..."
