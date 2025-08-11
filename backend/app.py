@@ -14,6 +14,7 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
 app, q = create_app()
 migrate = Migrate(app, db)
 login_manager = LoginManager(app)

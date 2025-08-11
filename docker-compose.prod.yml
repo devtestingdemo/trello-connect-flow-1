@@ -22,6 +22,7 @@ services:
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0
+      - FLASK_RUN_PORT=4001
       - FLASK_APP=app.py
 
   worker:
@@ -38,6 +39,7 @@ services:
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0
+      - FLASK_RUN_PORT=4001
       - FLASK_APP=app.py
 
 volumes:

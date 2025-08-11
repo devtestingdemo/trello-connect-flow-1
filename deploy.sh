@@ -47,14 +47,39 @@ REDIS_PORT=6379
 SECRET_KEY=spk-123
 SQLALCHEMY_DATABASE_URI=sqlite:///instance/users.db
 FRONTEND_URL=https://boards.norgayhrconsulting.com.au
+FLASK_ENV=production
+FLASK_DEBUG=0
+FLASK_APP=app.py
 EOF
     print_warning "Please edit .env.production with your actual values before continuing"
     exit 1
 fi
 
-# Step 3: Stop existing containers
-print_status "Stopping existing containers..."
-docker compose -f docker-compose.prod.yml down || true
+# Step 2.1: Copy production env to backend for Docker build
+print_status "Copying environment file to backend..."
+cp .env.production backend/.env
+
+# Step 2.2: Create instance directory with proper permissions
+print_status "Setting up database directory..."
+mkdir -p backend/instance
+chmod 755 backend/instance
+
+# Step 2.3: Initialize database
+print_status "Initializing database..."
+cd backend
+python3 -c "
+from app_factory import create_app
+from db import db
+app, q = create_app()
+with app.app_context():
+    db.create_all()
+    print('Database initialized successfully')
+"
+cd ..
+
+# Step 3: Stop existing containers and clean up orphans
+print_status "Stopping existing containers and cleaning up orphans..."
+docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
 # Step 4: Build and start containers
 print_status "Building and starting containers..."
@@ -76,11 +101,16 @@ fi
 
 # Step 7: Test API endpoint
 print_status "Testing API endpoint..."
+sleep 5  # Give the API a bit more time to start
 if curl -s http://localhost:4001/api/users > /dev/null; then
     print_status "✅ API is responding correctly!"
 else
     print_warning "⚠️  API might not be ready yet. Check logs:"
     docker compose -f docker-compose.prod.yml logs backend
+    print_warning "Trying alternative port 5000..."
+    if curl -s http://localhost:5000/api/users > /dev/null; then
+        print_warning "⚠️  API is running on port 5000 instead of 4001"
+    fi
 fi
 
 print_status "🎉 Deployment completed!"

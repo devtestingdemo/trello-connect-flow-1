@@ -30,6 +30,4 @@ def create_app():
         supports_credentials=True
     )
     db.init_app(app)
-    with app.app_context():
-        db.create_all()  # Ensures UserBoard and all tables are created
     return app, q
