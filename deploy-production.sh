@@ -84,11 +84,21 @@ print_status "Database will be initialized when container starts..."
 print_status "Stopping existing containers and cleaning up orphans..."
 docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
+# Additional cleanup to ensure no conflicts
+print_status "Performing additional cleanup..."
+docker system prune -f || true
+
 # Force remove any conflicting containers
 print_status "Removing any conflicting containers..."
+# Remove containers by project name pattern
+docker ps -a --filter "name=boardsnorgayhrconsultingcomau" --format "{{.Names}}" | xargs -r docker rm -f
+# Also try the old naming pattern
 docker ps -a --filter "name=trello-connect-flow" --format "{{.Names}}" | xargs -r docker rm -f
+# Remove containers using the ports
 docker ps -a --filter "publish=${FLASK_RUN_PORT}" --format "{{.Names}}" | xargs -r docker rm -f
 docker ps -a --filter "publish=${REDIS_PORT}" --format "{{.Names}}" | xargs -r docker rm -f
+# Remove any containers with redis in the name
+docker ps -a --filter "name=redis" --format "{{.Names}}" | xargs -r docker rm -f
 
 # Step 7: Build and start containers
 print_status "Building and starting production containers..."
