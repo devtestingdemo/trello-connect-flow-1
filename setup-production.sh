@@ -72,6 +72,8 @@ print_status "Firewall configured"
 
 # Step 6: Configure nginx
 print_status "Configuring nginx..."
+chmod +x generate-nginx-config.sh
+./generate-nginx-config.sh
 cp nginx.production.conf /etc/nginx/sites-available/boards.norgayhrconsulting.com.au
 ln -sf /etc/nginx/sites-available/boards.norgayhrconsulting.com.au /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default  # Remove default site

@@ -49,6 +49,15 @@ EOF
     exit 1
 fi
 
+# Load environment variables from .env.production
+print_status "Loading environment variables from .env.production..."
+export $(grep -v '^#' .env.production | xargs)
+
+# Generate nginx configuration with correct port
+print_status "Generating nginx configuration..."
+chmod +x generate-nginx-config.sh
+./generate-nginx-config.sh
+
 # Step 2: Build frontend for production
 print_status "Building frontend for production..."
 cd frontend
@@ -59,6 +68,9 @@ cd ..
 # Step 3: Copy production env to backend for Docker build
 print_status "Copying environment file to backend..."
 cp .env.production backend/.env
+
+# Also copy to root for Docker Compose
+cp .env.production .env
 
 # Step 4: Create instance directory with proper permissions
 print_status "Setting up database directory..."
@@ -80,17 +92,17 @@ cd ..
 
 # Step 6: Stop existing containers and clean up orphans
 print_status "Stopping existing containers and cleaning up orphans..."
-docker compose -f docker-compose.unified.yml down --remove-orphans || true
+docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
 # Force remove any conflicting containers
 print_status "Removing any conflicting containers..."
 docker ps -a --filter "name=trello-connect-flow" --format "{{.Names}}" | xargs -r docker rm -f
-docker ps -a --filter "publish=5000" --format "{{.Names}}" | xargs -r docker rm -f
-docker ps -a --filter "publish=6379" --format "{{.Names}}" | xargs -r docker rm -f
+docker ps -a --filter "publish=${FLASK_RUN_PORT}" --format "{{.Names}}" | xargs -r docker rm -f
+docker ps -a --filter "publish=${REDIS_PORT}" --format "{{.Names}}" | xargs -r docker rm -f
 
 # Step 7: Build and start containers
 print_status "Building and starting production containers..."
-docker compose -f docker-compose.unified.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --build
 
 # Step 8: Wait for services to be ready
 print_status "Waiting for services to be ready..."
@@ -98,37 +110,37 @@ sleep 15
 
 # Step 9: Check if services are running
 print_status "Checking service status..."
-if docker compose -f docker-compose.unified.yml ps | grep -q "Up"; then
+if docker compose -f docker-compose.prod.yml ps | grep -q "Up"; then
     print_status "✅ Services are running successfully!"
 else
     print_error "❌ Some services failed to start. Check logs:"
-    docker compose -f docker-compose.unified.yml logs
+    docker compose -f docker-compose.prod.yml logs
     exit 1
 fi
 
 # Step 10: Test unified application
 print_status "Testing unified application..."
 sleep 5  # Give the app time to start
-if curl -s http://localhost:5000/api/users > /dev/null; then
+if curl -s http://localhost:${FLASK_RUN_PORT}/api/users > /dev/null; then
     print_status "✅ API is responding correctly!"
 else
     print_warning "⚠️  API might not be ready yet. Check logs:"
-    docker compose -f docker-compose.unified.yml logs backend
+    docker compose -f docker-compose.prod.yml logs backend
 fi
 
 # Test frontend served by backend
-if curl -s http://localhost:5000 > /dev/null; then
+if curl -s http://localhost:${FLASK_RUN_PORT} > /dev/null; then
     print_status "✅ Frontend is being served by backend!"
 else
     print_warning "⚠️  Frontend might not be ready yet. Check logs:"
-    docker compose -f docker-compose.unified.yml logs backend
+    docker compose -f docker-compose.prod.yml logs backend
 fi
 
 print_status "🎉 Production deployment completed!"
 print_status "Your application is now running at:"
-echo "  - Application: http://localhost:5000 (Frontend + Backend)"
-echo "  - API endpoints: http://localhost:5000/api/*"
-echo "  - Redis: localhost:6379"
+echo "  - Application: http://localhost:${FLASK_RUN_PORT} (Frontend + Backend)"
+echo "  - API endpoints: http://localhost:${FLASK_RUN_PORT}/api/*"
+echo "  - Redis: localhost:${REDIS_PORT}"
 
 print_status "Next steps for production:"
 echo "1. Set up reverse proxy (nginx/Apache) to forward requests to localhost:5000"
@@ -137,12 +149,12 @@ echo "3. Set up domain DNS to point to this server"
 echo "4. Configure firewall to allow HTTP/HTTPS traffic"
 
 print_status "Useful commands:"
-echo "  - View logs: docker compose -f docker-compose.unified.yml logs -f"
-echo "  - Stop services: docker compose -f docker-compose.unified.yml down"
-echo "  - Restart services: docker compose -f docker-compose.unified.yml restart"
+echo "  - View logs: docker compose -f docker-compose.prod.yml logs -f"
+echo "  - Stop services: docker compose -f docker-compose.prod.yml down"
+echo "  - Restart services: docker compose -f docker-compose.prod.yml restart"
 echo "  - Update and redeploy: ./deploy-production.sh"
 
 # Show running containers
 echo ""
 print_status "Running containers:"
-docker compose -f docker-compose.unified.yml ps 
+docker compose -f docker-compose.prod.yml ps 
