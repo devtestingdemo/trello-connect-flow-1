@@ -20,6 +20,11 @@ migrate = Migrate(app, db)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
+# Initialize database tables
+with app.app_context():
+    db.create_all()
+    print("Database tables initialized successfully")
+
 # Remove UserLogin class, use User directly
 @login_manager.user_loader
 def load_user(user_id):

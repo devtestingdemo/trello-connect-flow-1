@@ -77,18 +77,8 @@ print_status "Setting up database directory..."
 mkdir -p backend/instance
 chmod 755 backend/instance
 
-# Step 5: Initialize database
-print_status "Initializing database..."
-cd backend
-python3 -c "
-from app_factory import create_app
-from db import db
-app, q = create_app()
-with app.app_context():
-    db.create_all()
-    print('Database initialized successfully')
-"
-cd ..
+# Step 5: Initialize database (will be done inside container)
+print_status "Database will be initialized when container starts..."
 
 # Step 6: Stop existing containers and clean up orphans
 print_status "Stopping existing containers and cleaning up orphans..."
@@ -118,7 +108,19 @@ else
     exit 1
 fi
 
-# Step 10: Test unified application
+# Step 10: Initialize database inside container
+print_status "Initializing database inside container..."
+sleep 10  # Give container time to start
+docker compose -f docker-compose.prod.yml exec -T backend python3 -c "
+from app_factory import create_app
+from db import db
+app, q = create_app()
+with app.app_context():
+    db.create_all()
+    print('Database initialized successfully')
+" || print_warning "Database initialization failed, but container is running"
+
+# Step 11: Test unified application
 print_status "Testing unified application..."
 sleep 5  # Give the app time to start
 if curl -s http://localhost:${FLASK_RUN_PORT}/api/users > /dev/null; then
