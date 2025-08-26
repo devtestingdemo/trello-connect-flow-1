@@ -1,0 +1,31 @@
+[1mdiff --git a/backend/app.py b/backend/app.py[m
+[1mindex 25fb515..00ee60d 100644[m
+[1m--- a/backend/app.py[m
+[1m+++ b/backend/app.py[m
+[36m@@ -41,7 +41,8 @@[m [mdef init_db():[m
+             [m
+             # Ensure the instance directory exists[m
+             import os[m
+[31m-            instance_dir = os.path.join(os.getcwd(), 'instance')[m
+[32m+[m[32m            # Use absolute path in container[m
+[32m+[m[32m            instance_dir = '/app/instance'[m
+             if not os.path.exists(instance_dir):[m
+                 os.makedirs(instance_dir, exist_ok=True)[m
+                 logger.info(f"Created instance directory: {instance_dir}")[m
+[1mdiff --git a/backend/app_factory.py b/backend/app_factory.py[m
+[1mindex 5a16a63..e5c7047 100644[m
+[1m--- a/backend/app_factory.py[m
+[1m+++ b/backend/app_factory.py[m
+[36m@@ -19,7 +19,11 @@[m [mdef create_app():[m
+     if not secret_key:[m
+         raise ValueError("SECRET_KEY environment variable must be set")[m
+     app.config['SECRET_KEY'] = secret_key[m
+[31m-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///instance/users.db')[m
+[32m+[m[32m    # Use absolute path for database in container[m
+[32m+[m[32m    db_path = os.environ.get('SQLALCHEMY_DATABASE_URI', '/app/instance/users.db')[m
+[32m+[m[32m    if not db_path.startswith('sqlite:///'):[m
+[32m+[m[32m        db_path = f"sqlite://{db_path}"[m
+[32m+[m[32m    app.config['SQLALCHEMY_DATABASE_URI'] = db_path[m
+     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False[m
+     # Redis connection - will be established when needed[m
+     redis_port = os.environ.get('REDIS_PORT', '6379')[m
