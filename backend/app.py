@@ -39,13 +39,8 @@ def init_db():
                 # Database or tables don't exist, create them
                 pass
             
-            # Ensure the instance directory exists
-            import os
-            # Use absolute path in container
-            instance_dir = '/app/instance'
-            if not os.path.exists(instance_dir):
-                os.makedirs(instance_dir, exist_ok=True)
-                logger.info(f"Created instance directory: {instance_dir}")
+            # Instance directory is handled by Docker volume mount
+            # No need to create it manually
             
             db.create_all()
             logger.info("Database tables initialized successfully")

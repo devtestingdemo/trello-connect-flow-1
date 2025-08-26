@@ -19,11 +19,8 @@ def create_app():
     if not secret_key:
         raise ValueError("SECRET_KEY environment variable must be set")
     app.config['SECRET_KEY'] = secret_key
-    # Use absolute path for database in container
-    db_path = os.environ.get('SQLALCHEMY_DATABASE_URI', '/app/instance/users.db')
-    if not db_path.startswith('sqlite:///'):
-        db_path = f"sqlite://{db_path}"
-    app.config['SQLALCHEMY_DATABASE_URI'] = db_path
+    # Use environment variable directly for database URI
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:////app/instance/users.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     # Redis connection - will be established when needed
     redis_port = os.environ.get('REDIS_PORT', '6379')
