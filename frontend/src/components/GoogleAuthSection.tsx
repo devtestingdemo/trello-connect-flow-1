@@ -24,28 +24,45 @@ export const GoogleAuthSection: React.FC<GoogleAuthSectionProps> = ({
   useEffect(() => {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
     
+    console.log('🔍 Debug - Client ID:', clientId);
+    console.log('🔍 Debug - Google object:', (window as any).google);
+    console.log('🔍 Debug - Button ref:', googleButtonRef.current);
+    console.log('🔍 Debug - Is authenticated:', isAuthenticated);
+    
     // Wait for both Google library and DOM element to be ready
     const initializeGoogleAuth = () => {
+      console.log('🔄 Attempting to initialize Google Auth...');
+      
       if (!isAuthenticated && (window as any).google && googleButtonRef.current && clientId) {
+        console.log('✅ All conditions met, initializing...');
         try {
           (window as any).google.accounts.id.initialize({
             client_id: clientId,
             callback: (response: any) => {
+              console.log('🎉 Google OAuth callback received:', response);
               // Decode JWT to get user info, or use Google's API to fetch profile
               const userObject = jwtDecode<{ email: string }>(response.credential);
               onAuthSuccess(userObject.email);
             }
           });
           
+          console.log('🎨 Rendering Google button...');
           (window as any).google.accounts.id.renderButton(googleButtonRef.current, {
             theme: "outline",
             size: "large"
           });
           
-          console.log('Google button rendered successfully');
+          console.log('✅ Google button rendered successfully');
         } catch (error) {
-          console.error('Error rendering Google button:', error);
+          console.error('❌ Error rendering Google button:', error);
         }
+      } else {
+        console.log('❌ Missing conditions:', {
+          isAuthenticated,
+          hasGoogle: !!(window as any).google,
+          hasRef: !!googleButtonRef.current,
+          hasClientId: !!clientId
+        });
       }
     };
 
@@ -54,6 +71,7 @@ export const GoogleAuthSection: React.FC<GoogleAuthSectionProps> = ({
     
     // If not ready, wait a bit and try again
     if (!(window as any).google || !googleButtonRef.current) {
+      console.log('⏰ Waiting for Google library or DOM element...');
       const timer = setTimeout(initializeGoogleAuth, 1000);
       return () => clearTimeout(timer);
     }

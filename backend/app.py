@@ -38,10 +38,12 @@ def init_db():
             except Exception:
                 # Database or tables don't exist, create them
                 pass
-            
-            # Instance directory is handled by Docker volume mount
-            # No need to create it manually
-            
+
+            # Create instance directory if it doesn't exist
+            import os
+            instance_path = os.path.join(os.path.dirname(__file__), '..', 'instance')
+            os.makedirs(instance_path, exist_ok=True)
+
             db.create_all()
             logger.info("Database tables initialized successfully")
         except Exception as e:
@@ -52,8 +54,8 @@ def init_db():
             # Don't crash the app, just log the error
             pass
 
-# Don't initialize database during import - it will be initialized when the app starts
-# init_db()  # Commented out to prevent import-time database access
+# Initialize database when app starts
+init_db()
 
 # Remove UserLogin class, use User directly
 @login_manager.user_loader
@@ -560,8 +562,9 @@ if __name__ == '__main__':
         init_db()
     except Exception as e:
         logger.error(f"Failed to initialize database on startup: {e}")
-    
+
     host = os.getenv('FLASK_RUN_HOST', '127.0.0.1')
     port = int(os.getenv('FLASK_RUN_PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ['true', '1', 'yes']
+    
     app.run(host=host, port=port, debug=debug)
