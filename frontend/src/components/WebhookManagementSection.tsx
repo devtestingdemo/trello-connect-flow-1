@@ -11,7 +11,7 @@ import { Webhook, Play, Square, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
-const TRELLO_WEBHOOK_CALLBACK_URL = `${API_BASE_URL}/trello-webhook`;
+const TRELLO_WEBHOOK_CALLBACK_URL = `${API_BASE_URL}/api/trello-webhook`;
 
 interface WebhookManagementSectionProps {
   trelloBoards: any[];
