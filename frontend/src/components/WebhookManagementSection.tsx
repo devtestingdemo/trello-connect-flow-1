@@ -10,9 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Webhook, Play, Square, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
-// Fix for Vite env typing
-// @ts-ignore
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 const TRELLO_WEBHOOK_CALLBACK_URL = `${API_BASE_URL}/trello-webhook`;
 
 interface WebhookManagementSectionProps {
@@ -178,7 +176,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
   const handleDeleteWebhook = async (webhookId: string) => {
     try {
-      console.log('Deleting webhook:', webhookId);
+      // Deleting webhook: {webhookId}
       const resp = await fetch(`${API_BASE_URL}/webhook-settings/${webhookId}`, { 
         method: 'DELETE',
         credentials: 'include'

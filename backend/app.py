@@ -6,12 +6,17 @@ from rq import Queue
 from tasks import process_trello_event
 from dotenv import load_dotenv
 import os
+import time
+import logging
 from app_factory import create_app
 import requests
 import json
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -23,7 +28,7 @@ login_manager.login_view = 'login'
 # Initialize database tables
 with app.app_context():
     db.create_all()
-    print("Database tables initialized successfully")
+    logger.info("Database tables initialized successfully")
 
 # Remove UserLogin class, use User directly
 @login_manager.user_loader
@@ -102,7 +107,7 @@ def add_user():
 
 @app.route('/api/users/<path:email>', methods=['GET'])
 def get_user(email):
-    print(f"Looking up user: {email}")
+    logger.info(f"Looking up user: {email}")
     user = User.query.get(email)
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -156,17 +161,17 @@ def delete_webhook_setting(setting_id):
         # Check if this was the last setting for this webhook
         remaining_settings = WebhookSetting.query.filter_by(webhook_id=webhook_id).count()
         if remaining_settings == 0:
-            # Delete the Trello webhook if no more settings exist
-            if current_user.apiKey and current_user.token:
-                trello_delete_url = f"https://api.trello.com/1/webhooks/{webhook_id}?key={current_user.apiKey}&token={current_user.token}"
-                try:
-                    trello_resp = requests.delete(trello_delete_url)
-                    if trello_resp.status_code not in [200, 204]:
-                        print(f"Failed to delete Trello webhook: {trello_resp.text}")
-                    else:
-                        print(f"Successfully deleted Trello webhook: {webhook_id}")
-                except Exception as e:
-                    print(f"Exception while deleting Trello webhook: {e}")
+                    # Delete the Trello webhook if no more settings exist
+        if current_user.apiKey and current_user.token:
+            trello_delete_url = f"https://api.trello.com/1/webhooks/{webhook_id}?key={current_user.apiKey}&token={current_user.token}"
+            try:
+                trello_resp = requests.delete(trello_delete_url)
+                if trello_resp.status_code not in [200, 204]:
+                    logger.warning(f"Failed to delete Trello webhook: {trello_resp.text}")
+                else:
+                    logger.info(f"Successfully deleted Trello webhook: {webhook_id}")
+            except Exception as e:
+                logger.error(f"Exception while deleting Trello webhook: {e}")
     
     return jsonify({'message': 'Webhook setting deleted'}), 200
 
@@ -174,11 +179,11 @@ def delete_webhook_setting(setting_id):
 def test_worker():
     """Test endpoint to verify worker is processing tasks"""
     def test_task():
-        print("[Worker] Test task executed successfully!")
+        logger.info("[Worker] Test task executed successfully!")
         return "Test completed"
     
     job = q.enqueue(test_task)
-    print(f"Test task queued with job ID: {job.id}")
+    logger.info(f"Test task queued with job ID: {job.id}")
     return jsonify({'message': 'Test task queued', 'job_id': job.id}), 200
 
 @app.route('/api/debug/webhooks', methods=['GET'])
@@ -239,47 +244,46 @@ def get_webhook_settings():
 
 @app.route('/api/trello-webhook', methods=['GET', 'POST'])
 def trello_webhook():
-    print("=== WEBHOOK ENDPOINT CALLED ===")
+    logger.info("=== WEBHOOK ENDPOINT CALLED ===")
     try:
-        print(f"trello_webhook :: Method: {request.method}")
+        logger.debug(f"trello_webhook :: Method: {request.method}")
         if request.method in ['GET', 'HEAD']:
-            print(f"trello_webhook :: Returning 200 for GET/HEAD request")
+            logger.debug(f"trello_webhook :: Returning 200 for GET/HEAD request")
             return '', 200
         if request.method == 'POST':
-            print(f"trello_webhook :: Received POST request")
-            print(f"trello_webhook :: Headers: {dict(request.headers)}")
-            print(f"trello_webhook :: Content-Type: {request.content_type}")
+            logger.debug(f"trello_webhook :: Received POST request")
+            logger.debug(f"trello_webhook :: Content-Type: {request.content_type}")
             if not request.is_json:
-                print(f"trello_webhook :: Not JSON content type, returning 415")
+                logger.warning(f"trello_webhook :: Not JSON content type, returning 415")
                 return jsonify({'error': 'Content-Type must be application/json'}), 415
             payload = request.get_json(silent=True)
-            print(f"trello_webhook :: Payload keys: {list(payload.keys()) if payload else 'None'}")
+            logger.debug(f"trello_webhook :: Payload keys: {list(payload.keys()) if payload else 'None'}")
             if not payload:
-                print(f"trello_webhook :: No payload, returning success")
+                logger.debug(f"trello_webhook :: No payload, returning success")
                 return jsonify({'success': True}), 200
             if 'action' not in payload:
-                print(f"trello_webhook :: No action in payload, returning 400")
+                logger.warning(f"trello_webhook :: No action in payload, returning 400")
                 return jsonify({'error': 'Invalid webhook payload'}), 400
             event_type = payload['action'].get('type')
-            print(f"trello_webhook :: event_type :: {event_type}")
+            logger.debug(f"trello_webhook :: event_type :: {event_type}")
 
             # Extract board_id from payload
             board_id = None
             if 'data' in payload['action'] and 'board' in payload['action']['data']:
                 board_id = payload['action']['data']['board'].get('id')
-            print(f"trello_webhook :: Extracted board_id: {board_id}")
+            logger.debug(f"trello_webhook :: Extracted board_id: {board_id}")
             if not board_id:
-                print(f"trello_webhook :: Missing board_id in payload")
+                logger.warning(f"trello_webhook :: Missing board_id in payload")
                 return jsonify({'error': 'Missing board_id in payload'}), 400
 
             # Look up TrelloWebhook for this board
             trello_webhook = TrelloWebhook.query.filter_by(board_id=board_id).first()
-            print(f"trello_webhook :: Found TrelloWebhook: {trello_webhook is not None}")
+            logger.debug(f"trello_webhook :: Found TrelloWebhook: {trello_webhook is not None}")
             if not trello_webhook:
-                print(f"trello_webhook :: No webhook registered for board {board_id}")
+                logger.warning(f"trello_webhook :: No webhook registered for board {board_id}")
                 return jsonify({'error': 'No webhook registered for this board'}), 404
             webhook_id = trello_webhook.webhook_id
-            print(f"trello_webhook :: Using webhook_id: {webhook_id}")
+            logger.debug(f"trello_webhook :: Using webhook_id: {webhook_id}")
 
             # Look up event_type in TrelloWebhookSetting
             # Map Trello event types to our custom event types
@@ -291,27 +295,27 @@ def trello_webhook():
             else:
                 mapped_event_type = event_type  # Use as-is for other events
             
-            print(f"trello_webhook :: Mapped event_type: {event_type} -> {mapped_event_type}")
+            logger.debug(f"trello_webhook :: Mapped event_type: {event_type} -> {mapped_event_type}")
             
             setting = TrelloWebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=mapped_event_type).first()
-            print(f"trello_webhook :: Found TrelloWebhookSetting: {setting is not None}")
+            logger.debug(f"trello_webhook :: Found TrelloWebhookSetting: {setting is not None}")
             if setting:
-                print(f"trello_webhook :: TrelloWebhookSetting enabled: {setting.enabled}")
+                logger.debug(f"trello_webhook :: TrelloWebhookSetting enabled: {setting.enabled}")
             if not setting or not setting.enabled:
-                print(f"trello_webhook :: Event type {mapped_event_type} not enabled or not found")
+                logger.debug(f"trello_webhook :: Event type {mapped_event_type} not enabled or not found")
                 return jsonify({'status': 'ignored', 'reason': f'Event type {mapped_event_type} not enabled'}), 200
 
             # Get all user preferences for this webhook and event type
             user_settings = WebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=mapped_event_type).all()
-            print(f"trello_webhook :: Found {len(user_settings)} user settings for event {mapped_event_type}")
+            logger.info(f"trello_webhook :: Found {len(user_settings)} user settings for event {mapped_event_type}")
             
             if not user_settings:
-                print(f"trello_webhook :: No user settings found for event type {mapped_event_type}")
+                logger.debug(f"trello_webhook :: No user settings found for event type {mapped_event_type}")
                 return jsonify({'status': 'ignored', 'reason': f'No user settings found for event type {mapped_event_type}'}), 200
 
             # Process event for each user who has settings for this event
             for user_setting in user_settings:
-                print(f"trello_webhook :: Processing for user {user_setting.user_email}")
+                logger.info(f"trello_webhook :: Processing for user {user_setting.user_email}")
                 # Add user-specific context to the payload
                 enriched_payload = {
                     'trello_event': payload,
@@ -322,13 +326,13 @@ def trello_webhook():
                     'label': user_setting.label,
                     'list_name': user_setting.list_name
                 }
-                print(f"trello_webhook :: Enqueuing task for user {user_setting.user_email}")
+                logger.debug(f"trello_webhook :: Enqueuing task for user {user_setting.user_email}")
                 q.enqueue(process_trello_event, enriched_payload)
             
-            print(f"trello_webhook :: Queued {len(user_settings)} tasks for event {mapped_event_type}")
+            logger.info(f"trello_webhook :: Queued {len(user_settings)} tasks for event {mapped_event_type}")
             return jsonify({'status': 'queued', 'event_type': mapped_event_type, 'users_processed': len(user_settings)}), 200
     except Exception as e:
-        print(f"trello_webhook :: {e}");
+        logger.error(f"trello_webhook :: {e}");
         return jsonify({'status': 'failed', 'error': str(e)});
 
 # Update Trello-related endpoints to check for Trello credentials
@@ -480,6 +484,19 @@ def setup_trello_board():
     db.session.add(user_board)
     db.session.commit()
     return jsonify({'message': 'Board created', 'board': user_board.to_dict()}), 201
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Docker health checks"""
+    try:
+        # Check database connection
+        db.session.execute('SELECT 1')
+        # Check Redis connection
+        q.connection.ping()
+        return jsonify({'status': 'healthy', 'timestamp': time.time()}), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 @app.route('/admin/clear-db', methods=['POST'])
 def clear_db():

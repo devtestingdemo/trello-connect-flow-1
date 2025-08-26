@@ -11,7 +11,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 def create_app():
     app = Flask(__name__, static_folder='frontend/dist', static_url_path='')
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-very-secret-key-here')
+    secret_key = os.environ.get('SECRET_KEY')
+    if not secret_key:
+        raise ValueError("SECRET_KEY environment variable must be set")
+    app.config['SECRET_KEY'] = secret_key
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///users.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     redis_port = os.environ.get('REDIS_PORT', '6379')

@@ -13,8 +13,7 @@ import { GoogleAuthSection } from "@/components/GoogleAuthSection";
 import { TrelloConnectionSection } from "@/components/TrelloConnectionSection";
 import { WebhookManagementSection } from "@/components/WebhookManagementSection";
 
-// @ts-ignore
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 const saveUserCredentials = async (email: string, apiKey: string, token: string) => {
   const response = await fetch(`${API_BASE_URL}/users`, {
