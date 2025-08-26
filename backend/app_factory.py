@@ -48,6 +48,17 @@ def create_app():
     )
     db.init_app(app)
     
+    # Proxy Google OAuth script if needed
+    @app.route('/google-oauth.js')
+    def proxy_google_oauth():
+        import requests
+        try:
+            response = requests.get('https://accounts.google.com/gsi/client', timeout=10)
+            return response.content, response.status_code, {'Content-Type': 'application/javascript'}
+        except Exception as e:
+            logger.error(f"Failed to proxy Google OAuth script: {e}")
+            return "console.error('Google OAuth script failed to load');", 500, {'Content-Type': 'application/javascript'}
+    
     # Serve React app for any non-API route
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
