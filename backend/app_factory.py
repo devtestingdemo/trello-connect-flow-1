@@ -55,8 +55,10 @@ def create_app():
         if path.startswith('api/'):
             # Let Flask handle API routes
             return app.send_static_file('index.html')
-        if path and os.path.exists(os.path.join(app.static_folder, path)):
-            # Serve static files
+        # Check if the requested path exists as a static file
+        static_file_path = os.path.join(app.static_folder, path)
+        if path and os.path.exists(static_file_path) and os.path.isfile(static_file_path):
+            # Serve static files (CSS, JS, images, etc.)
             return send_from_directory(app.static_folder, path)
         else:
             # Serve index.html for React Router routes
