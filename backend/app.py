@@ -41,7 +41,8 @@ def init_db():
 
             # Create instance directory if it doesn't exist
             import os
-            instance_path = os.path.join(os.path.dirname(__file__), 'instance')            os.makedirs(instance_path, exist_ok=True)
+            instance_path = os.path.join(os.path.dirname(__file__), 'instance')
+            os.makedirs(instance_path, exist_ok=True)
 
             db.create_all()
             logger.info("Database tables initialized successfully")
