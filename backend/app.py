@@ -25,10 +25,38 @@ migrate = Migrate(app, db)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# Initialize database tables
-with app.app_context():
-    db.create_all()
-    logger.info("Database tables initialized successfully")
+# Database initialization function - will be called when needed
+def init_db():
+    with app.app_context():
+        try:
+            # Check if database already exists and has tables
+            try:
+                db.session.execute('SELECT 1 FROM users LIMIT 1')
+                logger.info("Database already exists and has tables")
+                return
+            except Exception:
+                # Database or tables don't exist, create them
+                pass
+            
+            # Ensure the instance directory exists
+            import os
+            instance_dir = os.path.join(os.getcwd(), 'instance')
+            if not os.path.exists(instance_dir):
+                os.makedirs(instance_dir, exist_ok=True)
+                logger.info(f"Created instance directory: {instance_dir}")
+            
+            db.create_all()
+            logger.info("Database tables initialized successfully")
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            # Log more details about the error
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            # Don't crash the app, just log the error
+            pass
+
+# Don't initialize database during import - it will be initialized when the app starts
+# init_db()  # Commented out to prevent import-time database access
 
 # Remove UserLogin class, use User directly
 @login_manager.user_loader
@@ -41,6 +69,13 @@ def unauthorized():
 
 @app.route('/api/login', methods=['POST'])
 def login():
+    # Ensure database is initialized
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"Database initialization failed during login: {e}")
+        return jsonify({'error': 'Database initialization failed'}), 500
+    
     data = request.json
     email = data.get('email')
     user = User.query.get(email)
@@ -492,12 +527,27 @@ def health_check():
     try:
         # Check database connection
         db.session.execute('SELECT 1')
-        # Check Redis connection
-        q.connection.ping()
+        # Check Redis connection if available
+        if q and hasattr(q, 'connection') and q.connection:
+            try:
+                q.connection.ping()
+            except Exception as redis_error:
+                logger.warning(f"Redis health check failed: {redis_error}")
+                # Don't fail health check for Redis issues
         return jsonify({'status': 'healthy', 'timestamp': time.time()}), 200
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
+
+@app.route('/api/init-db', methods=['POST'])
+def initialize_database():
+    """Initialize database tables"""
+    try:
+        init_db()
+        return jsonify({'message': 'Database initialized successfully'}), 200
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        return jsonify({'error': f'Database initialization failed: {str(e)}'}), 500
 
 @app.route('/admin/clear-db', methods=['POST'])
 def clear_db():
@@ -507,6 +557,12 @@ def clear_db():
 
 
 if __name__ == '__main__':
+    # Initialize database when app starts
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"Failed to initialize database on startup: {e}")
+    
     host = os.getenv('FLASK_RUN_HOST', '127.0.0.1')
     port = int(os.getenv('FLASK_RUN_PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ['true', '1', 'yes']

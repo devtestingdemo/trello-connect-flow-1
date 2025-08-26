@@ -7,6 +7,10 @@ from redis import Redis
 from rq import Queue
 from dotenv import load_dotenv
 import os
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 def create_app():
@@ -15,12 +19,21 @@ def create_app():
     if not secret_key:
         raise ValueError("SECRET_KEY environment variable must be set")
     app.config['SECRET_KEY'] = secret_key
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///users.db')
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///instance/users.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    # Redis connection - will be established when needed
     redis_port = os.environ.get('REDIS_PORT', '6379')
     redis_url = f"redis://redis:{redis_port}/0"
-    redis_conn = Redis.from_url(redis_url)
-    q = Queue('trello-events', connection=redis_conn)
+    
+    # Create Redis connection with error handling
+    try:
+        redis_conn = Redis.from_url(redis_url, socket_connect_timeout=5, socket_timeout=5)
+        q = Queue('trello-events', connection=redis_conn)
+    except Exception as e:
+        # If Redis is not available, create a dummy queue
+        logger.warning(f"Redis connection failed: {e}. Using dummy queue.")
+        redis_conn = None
+        q = None
     app.config['SESSION_COOKIE_SAMESITE'] = 'None'
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_DOMAIN'] = None  # Allow cross-subdomain cookies

@@ -9,7 +9,15 @@ from app_factory import create_app
 # Configure logging
 logger = logging.getLogger(__name__)
 
-app, q = create_app()
+# Don't create app during import - it will be created when needed
+app = None
+q = None
+
+def get_app():
+    global app, q
+    if app is None:
+        app, q = create_app()
+    return app, q
 
 # Rate limiter
 class TrelloRateLimiter:
@@ -34,7 +42,9 @@ rate_limiter = TrelloRateLimiter()
 
 def process_trello_event(enriched_payload):
     logger.info(f'[Worker] Starting to process task with payload keys: {list(enriched_payload.keys())}')
-    with app.app_context():
+    # Get app context when needed
+    app_instance, q_instance = get_app()
+    with app_instance.app_context():
         # Extract Trello event and user context
         trello_event = enriched_payload.get('trello_event', {})
         user_email = enriched_payload.get('user_email')
