@@ -76,7 +76,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
     for (const boardObj of boardsToRegister) {
       try {
         // Register webhook via backend (will reuse if exists)
-        const response = await fetch(`${API_BASE_URL}/trello/webhooks`, {
+        const response = await fetch(`${API_BASE_URL}/api/trello/webhooks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -116,7 +116,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
           continue;
         }
         // Always save a new WebhookSetting for each event/config
-        await fetch(`${API_BASE_URL}/webhook-settings`, {
+        await fetch(`${API_BASE_URL}/api/webhook-settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -177,7 +177,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
   const handleDeleteWebhook = async (webhookId: string) => {
     try {
       // Deleting webhook: {webhookId}
-      const resp = await fetch(`${API_BASE_URL}/webhook-settings/${webhookId}`, { 
+      const resp = await fetch(`${API_BASE_URL}/api/webhook-settings/${webhookId}`, { 
         method: 'DELETE',
         credentials: 'include'
       });
@@ -213,7 +213,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
     }
     try {
       // Fetch user's webhook settings from our database
-      const response = await fetch(`${API_BASE_URL}/webhook-settings`, {
+      const response = await fetch(`${API_BASE_URL}/api/webhook-settings`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include'

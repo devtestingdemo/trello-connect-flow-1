@@ -48,14 +48,14 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
 
       
       // Link Trello credentials to user
-      await fetch(`${API_BASE_URL}/users/trello`, {
+      await fetch(`${API_BASE_URL}/api/users/trello`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey, token }),
         credentials: 'include',
       });
       // Verify credentials by calling backend
-      const verifyRes = await fetch(`${API_BASE_URL}/trello/verify`, {
+      const verifyRes = await fetch(`${API_BASE_URL}/api/trello/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -65,7 +65,7 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
         throw new Error(err.error || "Invalid API Key or Token");
       }
       // Fetch boards and lists from backend
-      const boardsRes = await fetch(`${API_BASE_URL}/trello/boards`, {
+      const boardsRes = await fetch(`${API_BASE_URL}/api/trello/boards`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -84,7 +84,7 @@ export const TrelloConnectionSection: React.FC<TrelloConnectionSectionProps> = (
         description: `Found ${boardsWithLists.length} Trello boards`,
       });
       // Call backend to setup board and lists if not already present (now only needs email)
-      const setupRes = await fetch(`${API_BASE_URL}/trello/setup-board`, {
+      const setupRes = await fetch(`${API_BASE_URL}/api/trello/setup-board`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: userEmail }),

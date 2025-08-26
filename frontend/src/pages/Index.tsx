@@ -16,7 +16,7 @@ import { WebhookManagementSection } from "@/components/WebhookManagementSection"
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 const saveUserCredentials = async (email: string, apiKey: string, token: string) => {
-  const response = await fetch(`${API_BASE_URL}/users`, {
+  const response = await fetch(`${API_BASE_URL}/api/users`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, apiKey, token }),
@@ -28,7 +28,7 @@ const saveUserCredentials = async (email: string, apiKey: string, token: string)
 };
 
 const getUserCredentials = async (email: string) => {
-  const response = await fetch(`${API_BASE_URL}/users/${email}`);
+  const response = await fetch(`${API_BASE_URL}/api/users/${email}`);
   if (!response.ok) {
     throw new Error('User not found');
   }
@@ -62,7 +62,7 @@ const Index = () => {
 
   // Session-based login
   const handleSessionLogin = async (email: string) => {
-    const resp = await fetch(`${API_BASE_URL}/login`, {
+    const resp = await fetch(`${API_BASE_URL}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -77,7 +77,7 @@ const Index = () => {
 
   // Session-based logout
   const handleSessionLogout = async () => {
-    await fetch(`${API_BASE_URL}/logout`, {
+    await fetch(`${API_BASE_URL}/api/logout`, {
       method: 'POST',
       credentials: 'include',
     });
@@ -108,7 +108,7 @@ const Index = () => {
         return;
       }
       try {
-        const res = await fetch(`${API_BASE_URL}/trello/verify`, {
+        const res = await fetch(`${API_BASE_URL}/api/trello/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -120,7 +120,7 @@ const Index = () => {
         } else if (res.ok) {
           setTrelloConnected(true);
           // Now fetch boards
-          const boardsRes = await fetch(`${API_BASE_URL}/trello/boards`, {
+          const boardsRes = await fetch(`${API_BASE_URL}/api/trello/boards`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
