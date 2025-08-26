@@ -41,7 +41,8 @@ def init_db():
             
             # Ensure the instance directory exists
             import os
-            instance_dir = os.path.join(os.getcwd(), 'instance')
+            # Use absolute path in container
+            instance_dir = '/app/instance'
             if not os.path.exists(instance_dir):
                 os.makedirs(instance_dir, exist_ok=True)
                 logger.info(f"Created instance directory: {instance_dir}")
