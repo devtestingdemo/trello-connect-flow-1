@@ -161,7 +161,8 @@ def delete_webhook_setting(setting_id):
         # Check if this was the last setting for this webhook
         remaining_settings = WebhookSetting.query.filter_by(webhook_id=webhook_id).count()
         if remaining_settings == 0:
-                    # Delete the Trello webhook if no more settings exist
+            # Delete the Trello webhook if no more settings exist
+            pass  # No action needed when no settings remain
         if current_user.apiKey and current_user.token:
             trello_delete_url = f"https://api.trello.com/1/webhooks/{webhook_id}?key={current_user.apiKey}&token={current_user.token}"
             try:
