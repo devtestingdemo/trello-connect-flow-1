@@ -31,7 +31,8 @@ def init_db():
         try:
             # Check if database already exists and has tables
             try:
-                db.session.execute('SELECT 1 FROM users LIMIT 1')
+                from sqlalchemy import text
+                db.session.execute(text('SELECT 1 FROM users LIMIT 1'))
                 logger.info("Database already exists and has tables")
                 return
             except Exception:
@@ -526,7 +527,8 @@ def health_check():
     """Health check endpoint for Docker health checks"""
     try:
         # Check database connection
-        db.session.execute('SELECT 1')
+        from sqlalchemy import text
+        db.session.execute(text('SELECT 1'))
         # Check Redis connection if available
         if q and hasattr(q, 'connection') and q.connection:
             try:
