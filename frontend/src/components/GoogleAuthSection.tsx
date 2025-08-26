@@ -23,19 +23,39 @@ export const GoogleAuthSection: React.FC<GoogleAuthSectionProps> = ({
 
   useEffect(() => {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    if (!isAuthenticated && (window as any).google && googleButtonRef.current && clientId) {
-      (window as any).google.accounts.id.initialize({
-        client_id: clientId,
-        callback: (response: any) => {
-          // Decode JWT to get user info, or use Google's API to fetch profile
-          const userObject = jwtDecode<{ email: string }>(response.credential);
-          onAuthSuccess(userObject.email);
+    
+    // Wait for both Google library and DOM element to be ready
+    const initializeGoogleAuth = () => {
+      if (!isAuthenticated && (window as any).google && googleButtonRef.current && clientId) {
+        try {
+          (window as any).google.accounts.id.initialize({
+            client_id: clientId,
+            callback: (response: any) => {
+              // Decode JWT to get user info, or use Google's API to fetch profile
+              const userObject = jwtDecode<{ email: string }>(response.credential);
+              onAuthSuccess(userObject.email);
+            }
+          });
+          
+          (window as any).google.accounts.id.renderButton(googleButtonRef.current, {
+            theme: "outline",
+            size: "large"
+          });
+          
+          console.log('Google button rendered successfully');
+        } catch (error) {
+          console.error('Error rendering Google button:', error);
         }
-      });
-      (window as any).google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: "outline",
-        size: "large"
-      });
+      }
+    };
+
+    // Try immediately
+    initializeGoogleAuth();
+    
+    // If not ready, wait a bit and try again
+    if (!(window as any).google || !googleButtonRef.current) {
+      const timer = setTimeout(initializeGoogleAuth, 1000);
+      return () => clearTimeout(timer);
     }
   }, [isAuthenticated, onAuthSuccess]);
 
