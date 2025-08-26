@@ -1,6 +1,6 @@
 # backend/app_factory.py
 
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, abort
 from flask_cors import CORS
 from db import db
 from redis import Redis
@@ -52,9 +52,10 @@ def create_app():
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
     def serve(path):
+        # Skip API routes - let Flask handle them
         if path.startswith('api/'):
-            # Let Flask handle API routes
-            return app.send_static_file('index.html')
+            return None  # This will let Flask continue to the next route handler
+        
         # Check if the requested path exists as a static file
         static_file_path = os.path.join(app.static_folder, path)
         if path and os.path.exists(static_file_path) and os.path.isfile(static_file_path):
