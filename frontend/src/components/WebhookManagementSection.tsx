@@ -27,16 +27,44 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
   const [selectedEvent, setSelectedEvent] = useState('');
   const [selectedBoard, setSelectedBoard] = useState('');
   const [selectedList, setSelectedList] = useState('');
-  const [selectedLabel, setSelectedLabel] = useState('');
+  const [selectedLabelId, setSelectedLabelId] = useState('');
+  const [selectedLabelName, setSelectedLabelName] = useState('');
   const [inviteEmails, setInviteEmails] = useState('');
   const [webhooks, setWebhooks] = useState([]);
+  const [boardLabels, setBoardLabels] = useState<{id: string, name: string, color?: string}[]>([]);
+  const [isLoadingLabels, setIsLoadingLabels] = useState(false);
 
   const eventTypes = [
     'Mentioned in a card',
     'Added to a card'
   ];
 
-  const labels = ['High Priority', 'Bug', 'Feature', 'Documentation', 'Review'];
+  const fetchLinkedBoardLabels = async () => {
+    setIsLoadingLabels(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/trello/labels`, {
+        method: 'GET',
+        credentials: 'include'
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to load labels');
+      }
+      const data = await res.json();
+      setBoardLabels(data.labels || []);
+    } catch (e: any) {
+      toast({ title: 'Failed to load labels', description: e.message, variant: 'destructive' });
+      setBoardLabels([]);
+    } finally {
+      setIsLoadingLabels(false);
+    }
+  };
+
+  useEffect(() => {
+    if (trelloConnected) {
+      fetchLinkedBoardLabels();
+    }
+  }, [trelloConnected]);
   
   const handleRegisterWebhook = async () => {
     if (!selectedEvent) {
@@ -88,8 +116,9 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
               event_type: selectedEvent,
               enabled: true,
               extra_config: {
-                label: selectedLabel,
-                list_name: selectedList
+                label_id: selectedLabelId || undefined,
+                label_name: selectedLabelName || undefined,
+                list_name: selectedList || undefined
               }
             }]
           })
@@ -115,7 +144,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
           });
           continue;
         }
-        // Always save a new WebhookSetting for each event/config
+        // Save a new WebhookSetting for each event/config
         await fetch(`${API_BASE_URL}/api/webhook-settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -124,8 +153,9 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
             board_id: boardObj.id,
             board_name: boardObj.name,
             event_type: selectedEvent,
-            label: selectedLabel,
-            list_name: selectedList,
+            label_id: selectedLabelId || undefined,
+            label_name: selectedLabelName || undefined,
+            list_name: selectedList || undefined,
             webhook_id: webhookData.id
           })
         });
@@ -138,7 +168,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
         setWebhooks(prev => [...prev, newWebhook]);
         toast({
           title: "Webhook registered!",
-          description: `Webhook for \"${selectedEvent}\" on \"${boardObj.name}\" has been created`,
+          description: `Webhook for "${selectedEvent}" on "${boardObj.name}" has been created`,
         });
         anySuccess = true;
       } catch (err: any) {
@@ -154,7 +184,8 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       setSelectedEvent('');
       setSelectedBoard('');
       setSelectedList('');
-      setSelectedLabel('');
+      setSelectedLabelId('');
+      setSelectedLabelName('');
     }
   };
 
@@ -228,7 +259,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       }
       
       // Group settings by webhook_id to show multiple events per webhook
-      const webhookGroups = {};
+      const webhookGroups: any = {};
       (data || []).forEach((setting: any) => {
         if (!webhookGroups[setting.webhook_id]) {
           webhookGroups[setting.webhook_id] = {
@@ -241,7 +272,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
         webhookGroups[setting.webhook_id].events.push({
           id: setting.id,
           event_type: setting.event_type,
-          label: setting.label,
+          label: setting.label_name || setting.label,
           list_name: setting.list_name,
           status: 'active'
         });
@@ -249,14 +280,14 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
       
       // Convert to array format for display
       const groupedWebhooks = Object.values(webhookGroups).map((group: any) => ({
-        id: group.id,
-        board: group.board,
-        board_id: group.board_id,
-        events: group.events,
+        id: (group as any).id,
+        board: (group as any).board,
+        board_id: (group as any).board_id,
+        events: (group as any).events,
         status: 'active'
       }));
       
-      setWebhooks(groupedWebhooks);
+      setWebhooks(groupedWebhooks as any);
     } catch (err: any) {
       toast({
         title: "Failed to fetch webhooks",
@@ -351,16 +382,24 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
             <div className="space-y-2">
               <Label>Target Label (Optional)</Label>
-              <Select value={selectedLabel} onValueChange={setSelectedLabel}>
+              <Select value={selectedLabelId} onValueChange={(val) => {
+                setSelectedLabelId(val);
+                const found = boardLabels.find(l => l.id === val);
+                setSelectedLabelName(found?.name || '');
+              }}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select label" />
+                  <SelectValue placeholder={isLoadingLabels ? 'Loading labels…' : 'Select label'} />
                 </SelectTrigger>
                 <SelectContent>
-                  {labels.map((label) => (
-                    <SelectItem key={label} value={label}>
-                      {label}
-                    </SelectItem>
-                  ))}
+                  {boardLabels.length === 0 && !isLoadingLabels ? (
+                    <div className="px-2 py-1 text-sm text-gray-500">No labels</div>
+                  ) : (
+                    boardLabels.map((l) => (
+                      <SelectItem key={l.id} value={l.id}>
+                        {l.name || '(no name)'}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -424,21 +463,21 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
           ) : (
             <div className="space-y-3">
               {webhooks.map((webhook, idx) => (
-                <div key={webhook.id || idx} className="border rounded-lg p-4">
+                <div key={(webhook as any).id || idx} className="border rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center space-x-3">
                       <Badge 
-                        variant={webhook.status === 'active' ? 'default' : 'secondary'}
-                        className={webhook.status === 'active' ? 'bg-green-500' : ''}
+                        variant={(webhook as any).status === 'active' ? 'default' : 'secondary'}
+                        className={(webhook as any).status === 'active' ? 'bg-green-500' : ''}
                       >
-                        {webhook.status}
+                        {(webhook as any).status}
                       </Badge>
                       <div>
-                        <p className="font-medium">Board: {webhook.board}</p>
-                        <p className="text-sm text-gray-500">Webhook ID: {webhook.id}</p>
+                        <p className="font-medium">Board: {(webhook as any).board}</p>
+                        <p className="text-sm text-gray-500">Webhook ID: {(webhook as any).id}</p>
                       </div>
                     </div>
-                    <Button variant="ghost" size="sm" onClick={() => handleDeleteWebhook(webhook.id)}>
+                    <Button variant="ghost" size="sm" onClick={() => handleDeleteWebhook((webhook as any).id)}>
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
@@ -446,7 +485,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
                   {/* Events for this webhook */}
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-gray-700">Events:</p>
-                    {webhook.events && webhook.events.map((event: any, eventIdx: number) => (
+                    {(webhook as any).events && (webhook as any).events.map((event: any, eventIdx: number) => (
                       <div key={eventIdx} className="flex items-center justify-between bg-gray-50 p-2 rounded">
                         <div>
                           <p className="text-sm font-medium">{event.event_type}</p>
