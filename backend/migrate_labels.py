@@ -1,38 +1,30 @@
 #!/usr/bin/env python3
 """
-Migration script to backfill label_id and label_name fields for existing webhook settings.
+Manual migration script to add label-related columns and backfill data
 
 This script:
-1. Finds all webhook settings that have a 'label' but no 'label_id'
-2. Fetches labels from the user's linked board
-3. Maps the label name to label ID and updates the database
+1. Adds linked_board_id and linked_board_name to users table
+2. Adds label_id and label_name to webhook_settings and user_webhook_preferences tables
+3. Backfills existing label data with IDs from Trello API
 4. Handles cases where labels no longer exist or users don't have linked boards
 
 Usage:
     python3 backend/migrate_labels.py
 """
 
+import sqlite3
 import os
-import sys
 import requests
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 import logging
-
-# Add the backend directory to the path so we can import our models
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from db import db, User, WebhookSetting, UserWebhookPreference
-from app_factory import create_app
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def get_trello_labels(user, board_id):
+def get_trello_labels(api_key, token, board_id):
     """Fetch labels from Trello for a given board"""
     try:
-        labels_url = f"https://api.trello.com/1/boards/{board_id}/labels?key={user.apiKey}&token={user.token}"
+        labels_url = f"https://api.trello.com/1/boards/{board_id}/labels?key={api_key}&token={token}"
         resp = requests.get(labels_url, timeout=10)
         
         if resp.status_code != 200:
@@ -44,20 +36,87 @@ def get_trello_labels(user, board_id):
         logger.error(f"Error fetching labels for board {board_id}: {e}")
         return []
 
-def migrate_webhook_settings():
-    """Migrate webhook settings to include label_id and label_name"""
-    app = create_app()
+def add_columns():
+    """Add the new columns to the database tables"""
+    # Get the database path
+    db_path = os.path.join(os.path.dirname(__file__), 'instance', 'users.db')
     
-    with app.app_context():
-        # Initialize database
-        db.init_app(app)
+    if not os.path.exists(db_path):
+        logger.error(f"Database not found at {db_path}")
+        return False
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    try:
+        # Check if columns already exist
+        cursor.execute("PRAGMA table_info(users)")
+        user_columns = [col[1] for col in cursor.fetchall()]
         
+        cursor.execute("PRAGMA table_info(webhook_settings)")
+        webhook_columns = [col[1] for col in cursor.fetchall()]
+        
+        cursor.execute("PRAGMA table_info(user_webhook_preferences)")
+        preference_columns = [col[1] for col in cursor.fetchall()]
+        
+        # Add linked_board_id and linked_board_name to users table
+        if 'linked_board_id' not in user_columns:
+            logger.info("Adding linked_board_id column to users table...")
+            cursor.execute("ALTER TABLE users ADD COLUMN linked_board_id TEXT")
+        
+        if 'linked_board_name' not in user_columns:
+            logger.info("Adding linked_board_name column to users table...")
+            cursor.execute("ALTER TABLE users ADD COLUMN linked_board_name TEXT")
+        
+        # Add label_id and label_name to webhook_settings table
+        if 'label_id' not in webhook_columns:
+            logger.info("Adding label_id column to webhook_settings table...")
+            cursor.execute("ALTER TABLE webhook_settings ADD COLUMN label_id TEXT")
+        
+        if 'label_name' not in webhook_columns:
+            logger.info("Adding label_name column to webhook_settings table...")
+            cursor.execute("ALTER TABLE webhook_settings ADD COLUMN label_name TEXT")
+        
+        # Add label_id and label_name to user_webhook_preferences table
+        if 'label_id' not in preference_columns:
+            logger.info("Adding label_id column to user_webhook_preferences table...")
+            cursor.execute("ALTER TABLE user_webhook_preferences ADD COLUMN label_id TEXT")
+        
+        if 'label_name' not in preference_columns:
+            logger.info("Adding label_name column to user_webhook_preferences table...")
+            cursor.execute("ALTER TABLE user_webhook_preferences ADD COLUMN label_name TEXT")
+        
+        conn.commit()
+        logger.info("Column migration completed successfully!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Column migration failed: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def backfill_labels():
+    """Backfill existing label data with IDs from Trello API"""
+    # Get the database path
+    db_path = os.path.join(os.path.dirname(__file__), 'instance', 'users.db')
+    
+    if not os.path.exists(db_path):
+        logger.error(f"Database not found at {db_path}")
+        return
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    try:
         # Get all webhook settings that have a label but no label_id
-        webhook_settings = WebhookSetting.query.filter(
-            WebhookSetting.label.isnot(None),
-            WebhookSetting.label != '',
-            (WebhookSetting.label_id.is_(None) | (WebhookSetting.label_id == ''))
-        ).all()
+        cursor.execute("""
+            SELECT id, user_email, label, label_id, label_name 
+            FROM webhook_settings 
+            WHERE label IS NOT NULL AND label != '' AND (label_id IS NULL OR label_id = '')
+        """)
+        webhook_settings = cursor.fetchall()
         
         logger.info(f"Found {len(webhook_settings)} webhook settings to migrate")
         
@@ -66,154 +125,159 @@ def migrate_webhook_settings():
         error_count = 0
         
         for setting in webhook_settings:
+            setting_id, user_email, label, label_id, label_name = setting
+            
             try:
-                # Get the user
-                user = User.query.filter_by(email=setting.user_email).first()
-                if not user:
-                    logger.warning(f"User {setting.user_email} not found, skipping setting {setting.id}")
+                # Get user info
+                cursor.execute("SELECT apiKey, token, linked_board_id FROM users WHERE email = ?", (user_email,))
+                user_data = cursor.fetchone()
+                
+                if not user_data:
+                    logger.warning(f"User {user_email} not found, skipping setting {setting_id}")
                     skipped_count += 1
                     continue
                 
-                # Check if user has linked board
-                if not user.linked_board_id:
-                    logger.warning(f"User {setting.user_email} has no linked board, skipping setting {setting.id}")
+                api_key, token, linked_board_id = user_data
+                
+                if not linked_board_id:
+                    logger.warning(f"User {user_email} has no linked board, skipping setting {setting_id}")
                     skipped_count += 1
                     continue
                 
-                # Check if user has Trello credentials
-                if not user.apiKey or not user.token:
-                    logger.warning(f"User {setting.user_email} has no Trello credentials, skipping setting {setting.id}")
+                if not api_key or not token:
+                    logger.warning(f"User {user_email} has no Trello credentials, skipping setting {setting_id}")
                     skipped_count += 1
                     continue
                 
                 # Fetch labels from Trello
-                labels = get_trello_labels(user, user.linked_board_id)
+                labels = get_trello_labels(api_key, token, linked_board_id)
                 
                 # Find matching label
                 matching_label = None
-                for label in labels:
-                    if label.get('name') == setting.label:
-                        matching_label = label
+                for label_data in labels:
+                    if label_data.get('name') == label:
+                        matching_label = label_data
                         break
                 
                 if matching_label:
                     # Update the setting with label_id and label_name
-                    setting.label_id = matching_label.get('id')
-                    setting.label_name = matching_label.get('name', setting.label)
+                    cursor.execute("""
+                        UPDATE webhook_settings 
+                        SET label_id = ?, label_name = ? 
+                        WHERE id = ?
+                    """, (matching_label.get('id'), matching_label.get('name', label), setting_id))
                     
-                    logger.info(f"Migrated setting {setting.id}: label '{setting.label}' -> ID '{setting.label_id}'")
+                    logger.info(f"Migrated setting {setting_id}: label '{label}' -> ID '{matching_label.get('id')}'")
                     migrated_count += 1
                 else:
-                    logger.warning(f"Label '{setting.label}' not found on board {user.linked_board_id} for setting {setting.id}")
+                    logger.warning(f"Label '{label}' not found on board {linked_board_id} for setting {setting_id}")
                     # Still update with the name we have, but no ID
-                    setting.label_name = setting.label
+                    cursor.execute("""
+                        UPDATE webhook_settings 
+                        SET label_name = ? 
+                        WHERE id = ?
+                    """, (label, setting_id))
                     skipped_count += 1
                 
             except Exception as e:
-                logger.error(f"Error migrating setting {setting.id}: {e}")
+                logger.error(f"Error migrating setting {setting_id}: {e}")
                 error_count += 1
         
-        # Commit all changes
-        try:
-            db.session.commit()
-            logger.info(f"Migration completed: {migrated_count} migrated, {skipped_count} skipped, {error_count} errors")
-        except Exception as e:
-            logger.error(f"Error committing changes: {e}")
-            db.session.rollback()
-
-def migrate_user_webhook_preferences():
-    """Migrate user webhook preferences to include label_id and label_name"""
-    app = create_app()
-    
-    with app.app_context():
-        # Initialize database
-        db.init_app(app)
-        
-        # Get all user webhook preferences that have a label but no label_id
-        preferences = UserWebhookPreference.query.filter(
-            UserWebhookPreference.label.isnot(None),
-            UserWebhookPreference.label != '',
-            (UserWebhookPreference.label_id.is_(None) | (UserWebhookPreference.label_id == ''))
-        ).all()
+        # Also migrate user_webhook_preferences
+        cursor.execute("""
+            SELECT id, user_email, label, label_id, label_name 
+            FROM user_webhook_preferences 
+            WHERE label IS NOT NULL AND label != '' AND (label_id IS NULL OR label_id = '')
+        """)
+        preferences = cursor.fetchall()
         
         logger.info(f"Found {len(preferences)} user webhook preferences to migrate")
         
-        migrated_count = 0
-        skipped_count = 0
-        error_count = 0
-        
         for preference in preferences:
+            pref_id, user_email, label, label_id, label_name = preference
+            
             try:
-                # Get the user
-                user = User.query.filter_by(email=preference.user_email).first()
-                if not user:
-                    logger.warning(f"User {preference.user_email} not found, skipping preference {preference.id}")
+                # Get user info
+                cursor.execute("SELECT apiKey, token, linked_board_id FROM users WHERE email = ?", (user_email,))
+                user_data = cursor.fetchone()
+                
+                if not user_data:
+                    logger.warning(f"User {user_email} not found, skipping preference {pref_id}")
                     skipped_count += 1
                     continue
                 
-                # Check if user has linked board
-                if not user.linked_board_id:
-                    logger.warning(f"User {preference.user_email} has no linked board, skipping preference {preference.id}")
+                api_key, token, linked_board_id = user_data
+                
+                if not linked_board_id:
+                    logger.warning(f"User {user_email} has no linked board, skipping preference {pref_id}")
                     skipped_count += 1
                     continue
                 
-                # Check if user has Trello credentials
-                if not user.apiKey or not user.token:
-                    logger.warning(f"User {preference.user_email} has no Trello credentials, skipping preference {preference.id}")
+                if not api_key or not token:
+                    logger.warning(f"User {user_email} has no Trello credentials, skipping preference {pref_id}")
                     skipped_count += 1
                     continue
                 
                 # Fetch labels from Trello
-                labels = get_trello_labels(user, user.linked_board_id)
+                labels = get_trello_labels(api_key, token, linked_board_id)
                 
                 # Find matching label
                 matching_label = None
-                for label in labels:
-                    if label.get('name') == preference.label:
-                        matching_label = label
+                for label_data in labels:
+                    if label_data.get('name') == label:
+                        matching_label = label_data
                         break
                 
                 if matching_label:
                     # Update the preference with label_id and label_name
-                    preference.label_id = matching_label.get('id')
-                    preference.label_name = matching_label.get('name', preference.label)
+                    cursor.execute("""
+                        UPDATE user_webhook_preferences 
+                        SET label_id = ?, label_name = ? 
+                        WHERE id = ?
+                    """, (matching_label.get('id'), matching_label.get('name', label), pref_id))
                     
-                    logger.info(f"Migrated preference {preference.id}: label '{preference.label}' -> ID '{preference.label_id}'")
+                    logger.info(f"Migrated preference {pref_id}: label '{label}' -> ID '{matching_label.get('id')}'")
                     migrated_count += 1
                 else:
-                    logger.warning(f"Label '{preference.label}' not found on board {user.linked_board_id} for preference {preference.id}")
+                    logger.warning(f"Label '{label}' not found on board {linked_board_id} for preference {pref_id}")
                     # Still update with the name we have, but no ID
-                    preference.label_name = preference.label
+                    cursor.execute("""
+                        UPDATE user_webhook_preferences 
+                        SET label_name = ? 
+                        WHERE id = ?
+                    """, (label, pref_id))
                     skipped_count += 1
                 
             except Exception as e:
-                logger.error(f"Error migrating preference {preference.id}: {e}")
+                logger.error(f"Error migrating preference {pref_id}: {e}")
                 error_count += 1
         
-        # Commit all changes
-        try:
-            db.session.commit()
-            logger.info(f"User preferences migration completed: {migrated_count} migrated, {skipped_count} skipped, {error_count} errors")
-        except Exception as e:
-            logger.error(f"Error committing changes: {e}")
-            db.session.rollback()
+        conn.commit()
+        logger.info(f"Data migration completed: {migrated_count} migrated, {skipped_count} skipped, {error_count} errors")
+        
+    except Exception as e:
+        logger.error(f"Data migration failed: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 def main():
     """Main migration function"""
     logger.info("Starting label migration...")
     
     try:
-        # Migrate webhook settings
-        migrate_webhook_settings()
+        # Step 1: Add columns
+        if not add_columns():
+            logger.error("Failed to add columns, aborting migration")
+            return
         
-        # Migrate user webhook preferences
-        migrate_user_webhook_preferences()
+        # Step 2: Backfill data
+        backfill_labels()
         
         logger.info("Label migration completed successfully!")
         
     except Exception as e:
         logger.error(f"Migration failed: {e}")
-        sys.exit(1)
 
 if __name__ == "__main__":
     main() 
