@@ -164,41 +164,34 @@ def save_webhook_setting():
     label_name = data.get('label_name')
     list_name = data.get('list_name')
     webhook_id = data.get('webhook_id')
-    
     if not webhook_id:
         return jsonify({'error': 'Missing required fields'}), 400
     
     # Validate label belongs to linked board if provided
-    if label_id and label_name:
-        user = current_user
-        if not user.linked_board_id:
-            return jsonify({'error': 'No linked board found'}), 400
-        
+    if label_id and current_user.linked_board_id:
         # Verify the label exists on the linked board
+        api_key = current_user.apiKey
+        token = current_user.token
+        labels_url = f"https://api.trello.com/1/boards/{current_user.linked_board_id}/labels?key={api_key}&token={token}"
         try:
-            api_key = user.apiKey
-            token = user.token
-            labels_url = f'https://api.trello.com/1/boards/{user.linked_board_id}/labels?key={api_key}&token={token}'
-            labels_resp = requests.get(labels_url)
-            
-            if labels_resp.status_code == 200:
-                labels_data = labels_resp.json()
-                label_exists = any(l.get('id') == label_id and l.get('name') == label_name for l in labels_data)
+            resp = requests.get(labels_url)
+            if resp.status_code == 200:
+                board_labels = resp.json()
+                label_exists = any(l.get('id') == label_id for l in board_labels)
                 if not label_exists:
-                    return jsonify({'error': 'Selected label does not belong to your linked board'}), 400
+                    return jsonify({'error': 'Selected label does not exist on the linked board'}), 400
             else:
-                logger.warning(f"Failed to validate label: {labels_resp.text}")
-                # Continue without validation if Trello API fails
+                logger.warning(f"Could not validate label {label_id} against board {current_user.linked_board_id}")
         except Exception as e:
             logger.error(f"Error validating label: {e}")
-            # Continue without validation if there's an error
+            # Continue without validation if Trello API fails
     
     setting = WebhookSetting(
         user_email=current_user.email,
         board_id=board_id,
         board_name=board_name,
         event_type=event_type,
-        label=label,  # Keep for backward compatibility
+        label=label,
         label_id=label_id,
         label_name=label_name,
         list_name=list_name,
@@ -390,8 +383,8 @@ def trello_webhook():
                     'board_name': user_setting.board_name,
                     'event_type': user_setting.event_type,
                     'label': user_setting.label,  # Keep for backward compatibility
-                    'label_id': user_setting.label_id,  # New: direct label ID
-                    'label_name': user_setting.label_name,  # New: label name for reference
+                    'label_id': user_setting.label_id,
+                    'label_name': user_setting.label_name,
                     'list_name': user_setting.list_name
                 }
                 logger.debug(f"trello_webhook :: Enqueuing task for user {user_setting.user_email}")
@@ -551,7 +544,7 @@ def setup_trello_board():
     user_board = UserBoard(user_email=user.email, board_id=board_id, board_name=board_name, lists=lists)
     db.session.add(user_board)
     
-    # Store the linked board info in the user record
+    # Update user's linked board information
     user.linked_board_id = board_id
     user.linked_board_name = board_name
     
@@ -560,41 +553,41 @@ def setup_trello_board():
 
 @app.route('/api/trello/labels', methods=['GET'])
 @login_required
-def trello_get_labels():
-    """Fetch labels from the user's linked board"""
+def get_trello_labels():
+    """Get labels from the user's linked board"""
     user = current_user
     if not user.apiKey or not user.token:
         return jsonify({'error': 'Trello not linked'}), 400
+    
     if not user.linked_board_id:
         return jsonify({'error': 'No linked board found. Please connect to Trello first.'}), 400
     
     api_key = user.apiKey
     token = user.token
-    board_id = user.linked_board_id
     
+    # Fetch labels from the linked board
+    labels_url = f"https://api.trello.com/1/boards/{user.linked_board_id}/labels?key={api_key}&token={token}"
     try:
-        # Fetch labels from the linked board
-        labels_url = f'https://api.trello.com/1/boards/{board_id}/labels?key={api_key}&token={token}'
-        labels_resp = requests.get(labels_url)
+        resp = requests.get(labels_url)
+        if resp.status_code != 200:
+            logger.error(f"Failed to fetch labels for board {user.linked_board_id}: {resp.text}")
+            return jsonify({'error': 'Failed to fetch labels from Trello'}), 500
         
-        if labels_resp.status_code != 200:
-            return jsonify({'error': 'Failed to fetch labels', 'details': labels_resp.text}), 400
-        
-        labels_data = labels_resp.json()
-        
+        labels = resp.json()
         # Format labels for frontend consumption
         formatted_labels = []
-        for label in labels_data:
+        for label in labels:
             formatted_labels.append({
                 'id': label.get('id'),
-                'name': label.get('name', 'Unnamed Label'),
-                'color': label.get('color', 'gray')
+                'name': label.get('name', ''),
+                'color': label.get('color', ''),
+                'uses': label.get('uses', 0)
             })
         
         return jsonify({'labels': formatted_labels}), 200
         
     except Exception as e:
-        logger.error(f"Error fetching labels for board {board_id}: {e}")
+        logger.error(f"Error fetching labels: {e}")
         return jsonify({'error': 'Failed to fetch labels'}), 500
 
 @app.route('/health', methods=['GET'])

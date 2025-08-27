@@ -19,19 +19,6 @@ interface WebhookManagementSectionProps {
   userEmail: string;
 }
 
-interface Label {
-  id: string;
-  name: string;
-  color: string;
-}
-
-interface Webhook {
-  id: string;
-  event: string;
-  board: string;
-  status: string;
-}
-
 export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> = ({
   trelloBoards,
   trelloConnected,
@@ -41,9 +28,10 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
   const [selectedBoard, setSelectedBoard] = useState('');
   const [selectedList, setSelectedList] = useState('');
   const [selectedLabel, setSelectedLabel] = useState('');
+  const [selectedLabelId, setSelectedLabelId] = useState('');
   const [inviteEmails, setInviteEmails] = useState('');
-  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
-  const [labels, setLabels] = useState<Label[]>([]);
+  const [webhooks, setWebhooks] = useState([]);
+  const [labels, setLabels] = useState<Array<{id: string, name: string, color: string}>>([]);
   const [labelsLoading, setLabelsLoading] = useState(false);
   const [labelsError, setLabelsError] = useState('');
 
@@ -52,7 +40,7 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
     'Added to a card'
   ];
 
-  // Fetch labels from the linked board when Trello is connected
+  // Fetch labels when component mounts and Trello is connected
   useEffect(() => {
     const fetchLabels = async () => {
       if (!trelloConnected) {
@@ -170,15 +158,15 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({
-            board_id: boardObj.id,
-            board_name: boardObj.name,
-            event_type: selectedEvent,
-            label: selectedLabel,  // Keep for backward compatibility
-            label_id: selectedLabel ? labels.find(l => l.name === selectedLabel)?.id : null,
-            label_name: selectedLabel,
-            list_name: selectedList,
-            webhook_id: webhookData.id
+                      body: JSON.stringify({
+              board_id: boardObj.id,
+              board_name: boardObj.name,
+              event_type: selectedEvent,
+              label: selectedLabel,  // Keep for backward compatibility
+              label_id: selectedLabelId,
+              label_name: selectedLabel,
+              list_name: selectedList,
+              webhook_id: webhookData.id
           })
         });
         const newWebhook = {
@@ -403,42 +391,44 @@ export const WebhookManagementSection: React.FC<WebhookManagementSectionProps> =
 
             <div className="space-y-2">
               <Label>Target Label (Optional)</Label>
-              <Select value={selectedLabel} onValueChange={setSelectedLabel} disabled={labelsLoading}>
-                <SelectTrigger>
-                  <SelectValue placeholder={labelsLoading ? "Loading labels..." : labelsError ? "Error loading labels" : "Select label"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {labelsLoading ? (
-                    <SelectItem value="" disabled>
-                      Loading labels...
-                    </SelectItem>
-                  ) : labelsError ? (
-                    <SelectItem value="" disabled>
-                      Error: {labelsError}
-                    </SelectItem>
-                  ) : labels.length === 0 ? (
-                    <SelectItem value="" disabled>
-                      No labels found on your board
-                    </SelectItem>
-                  ) : (
-                    labels.map((label) => (
-                      <SelectItem key={label.id} value={label.name}>
-                        <div className="flex items-center gap-2">
-                          <div 
-                            className="w-3 h-3 rounded-full" 
-                            style={{ backgroundColor: label.color === 'gray' ? '#6b7280' : label.color }}
-                          />
-                          {label.name}
-                        </div>
+              {labelsLoading ? (
+                <div className="text-sm text-gray-500">Loading labels...</div>
+              ) : labelsError ? (
+                <div className="text-sm text-red-500">Error: {labelsError}</div>
+              ) : (
+                <Select 
+                  value={selectedLabelId} 
+                  onValueChange={(value) => {
+                    setSelectedLabelId(value);
+                    const selectedLabelObj = labels.find(l => l.id === value);
+                    setSelectedLabel(selectedLabelObj?.name || '');
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select label" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {labels.length === 0 ? (
+                      <SelectItem value="" disabled>
+                        No labels found on board
                       </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-              {labelsError && (
-                <p className="text-xs text-red-500">
-                  {labelsError}
-                </p>
+                    ) : (
+                      labels.map((label) => (
+                        <SelectItem key={label.id} value={label.id}>
+                          <div className="flex items-center gap-2">
+                            {label.color && (
+                              <div 
+                                className="w-3 h-3 rounded-full" 
+                                style={{ backgroundColor: label.color }}
+                              />
+                            )}
+                            {label.name || 'Unnamed Label'}
+                          </div>
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
               )}
             </div>
           </div>

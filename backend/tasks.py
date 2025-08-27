@@ -52,8 +52,8 @@ def process_trello_event(enriched_payload):
         board_name = enriched_payload.get('board_name')
         event_type = enriched_payload.get('event_type')
         label = enriched_payload.get('label')  # Keep for backward compatibility
-        label_id = enriched_payload.get('label_id')  # New: direct label ID
-        label_name = enriched_payload.get('label_name')  # New: label name for reference
+        label_id = enriched_payload.get('label_id')
+        label_name = enriched_payload.get('label_name')
         list_name = enriched_payload.get('list_name')
         
         logger.info(f'[Worker] Extracted user_email: {user_email}, event_type: {event_type}, board_name: {board_name}')
@@ -144,15 +144,15 @@ def process_trello_event(enriched_payload):
 
         # Apply label if specified
         if label_id:
-            # Use label ID directly (preferred method)
+            # Apply label by ID (preferred method)
             add_label_url = f"https://api.trello.com/1/cards/{new_card_id}/idLabels?key={api_key}&token={token}"
             label_resp = call_trello_api("POST", add_label_url, json={"value": label_id})
             if label_resp and label_resp.status_code in [200, 201]:
-                logger.info(f'[Worker] Applied label {label_name} (ID: {label_id}) to card {new_card_id}')
+                logger.info(f'[Worker] Applied label {label_id} to card {new_card_id}')
             else:
-                logger.warning(f'[Worker] Failed to apply label {label_name} (ID: {label_id}) to card {new_card_id}')
+                logger.warning(f'[Worker] Failed to apply label {label_id} to card {new_card_id}')
         elif label:
-            # Fallback: Find label id on the board by name (backward compatibility)
+            # Fallback: Find label by name (for backward compatibility)
             labels_url = f"https://api.trello.com/1/boards/{target_board_id}/labels?key={api_key}&token={token}"
             labels_resp = call_trello_api("GET", labels_url)
             if labels_resp and labels_resp.status_code == 200:
@@ -162,11 +162,12 @@ def process_trello_event(enriched_payload):
                     fallback_label_id = label_obj['id']
                     add_label_url = f"https://api.trello.com/1/cards/{new_card_id}/idLabels?key={api_key}&token={token}"
                     call_trello_api("POST", add_label_url, json={"value": fallback_label_id})
-                    logger.info(f'[Worker] Applied label {label} (ID: {fallback_label_id}) to card {new_card_id} using fallback lookup')
+                    logger.info(f'[Worker] Applied label {label} (ID: {fallback_label_id}) to card {new_card_id}')
                 else:
                     logger.warning(f'[Worker] Label {label} not found on board {target_board_id}')
             else:
                 logger.error(f'[Worker] Failed to fetch labels for board {target_board_id}')
+        
         logger.info(f'[Worker] Card {card_id} copied to {new_card_id} in list {enquiry_in_list_id} and label applied if specified.')
 
 def call_trello_api(method, url, json=None):

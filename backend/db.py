@@ -11,8 +11,8 @@ class User(db.Model, UserMixin):
     email = db.Column(db.String, primary_key=True)
     apiKey = db.Column(db.String, nullable=False)
     token = db.Column(db.String, nullable=False)
-    linked_board_id = db.Column(db.String, nullable=True)  # Store the user's linked/created board ID
-    linked_board_name = db.Column(db.String, nullable=True)  # Store the user's linked/created board name
+    linked_board_id = db.Column(db.String, nullable=True)
+    linked_board_name = db.Column(db.String, nullable=True)
 
     def get_id(self):
         return self.email
@@ -34,8 +34,8 @@ class WebhookSetting(db.Model):
     board_name = db.Column(db.String, nullable=True)
     event_type = db.Column(db.String, nullable=True)
     label = db.Column(db.String, nullable=True)  # Keep for backward compatibility
-    label_id = db.Column(db.String, nullable=True)  # Store Trello label ID
-    label_name = db.Column(db.String, nullable=True)  # Store Trello label name
+    label_id = db.Column(db.String, nullable=True)
+    label_name = db.Column(db.String, nullable=True)
     list_name = db.Column(db.String, nullable=True)
     webhook_id = db.Column(db.String, nullable=True)  # Trello webhook id
 
@@ -46,7 +46,7 @@ class WebhookSetting(db.Model):
             'board_id': self.board_id,
             'board_name': self.board_name,
             'event_type': self.event_type,
-            'label': self.label,  # Keep for backward compatibility
+            'label': self.label,
             'label_id': self.label_id,
             'label_name': self.label_name,
             'list_name': self.list_name,
@@ -97,7 +97,9 @@ class UserWebhookPreference(db.Model):
     event_type = db.Column(db.String, nullable=False)
     board_id = db.Column(db.String, nullable=False)
     board_name = db.Column(db.String, nullable=False)
-    label = db.Column(db.String, nullable=True)
+    label = db.Column(db.String, nullable=True)  # Keep for backward compatibility
+    label_id = db.Column(db.String, nullable=True)
+    label_name = db.Column(db.String, nullable=True)
     list_name = db.Column(db.String, nullable=True)
     enabled = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
@@ -113,6 +115,8 @@ class UserWebhookPreference(db.Model):
             'board_id': self.board_id,
             'board_name': self.board_name,
             'label': self.label,
+            'label_id': self.label_id,
+            'label_name': self.label_name,
             'list_name': self.list_name,
             'enabled': self.enabled,
             'created_at': self.created_at.isoformat() if self.created_at else None
