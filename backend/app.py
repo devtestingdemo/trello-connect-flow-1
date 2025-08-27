@@ -159,42 +159,46 @@ def save_webhook_setting():
     board_id = data.get('board_id')
     board_name = data.get('board_name')
     event_type = data.get('event_type')
-    # Legacy name-only
-    label = data.get('label')
-    # Preferred fields
+    label = data.get('label')  # Keep for backward compatibility
     label_id = data.get('label_id')
-    label_name = data.get('label_name') or label
+    label_name = data.get('label_name')
     list_name = data.get('list_name')
     webhook_id = data.get('webhook_id')
+    
     if not webhook_id:
         return jsonify({'error': 'Missing required fields'}), 400
-
-    # If a label_id is provided, validate it belongs to the user's linked board
-    if label_id:
-        user_board = UserBoard.query.filter_by(user_email=current_user.email).first()
-        target_board_id = user_board.board_id if user_board else board_id
-        if not target_board_id:
-            return jsonify({'error': 'No linked board to validate label against'}), 400
-        api_key = current_user.apiKey
-        token = current_user.token
+    
+    # Validate label belongs to linked board if provided
+    if label_id and label_name:
+        user = current_user
+        if not user.linked_board_id:
+            return jsonify({'error': 'No linked board found'}), 400
+        
+        # Verify the label exists on the linked board
         try:
-            labels_url = f'https://api.trello.com/1/boards/{target_board_id}/labels?key={api_key}&token={token}'
+            api_key = user.apiKey
+            token = user.token
+            labels_url = f'https://api.trello.com/1/boards/{user.linked_board_id}/labels?key={api_key}&token={token}'
             labels_resp = requests.get(labels_url)
-            if labels_resp.status_code != 200:
-                return jsonify({'error': 'Failed to fetch board labels for validation', 'details': labels_resp.text}), 400
-            labels = labels_resp.json()
-            if not any(l.get('id') == label_id for l in labels):
-                return jsonify({'error': 'Selected label does not belong to the linked board'}), 400
+            
+            if labels_resp.status_code == 200:
+                labels_data = labels_resp.json()
+                label_exists = any(l.get('id') == label_id and l.get('name') == label_name for l in labels_data)
+                if not label_exists:
+                    return jsonify({'error': 'Selected label does not belong to your linked board'}), 400
+            else:
+                logger.warning(f"Failed to validate label: {labels_resp.text}")
+                # Continue without validation if Trello API fails
         except Exception as e:
-            logger.error(f'Label validation failed: {e}')
-            return jsonify({'error': 'Label validation failed'}), 400
-
+            logger.error(f"Error validating label: {e}")
+            # Continue without validation if there's an error
+    
     setting = WebhookSetting(
         user_email=current_user.email,
         board_id=board_id,
         board_name=board_name,
         event_type=event_type,
-        label=label_name,
+        label=label,  # Keep for backward compatibility
         label_id=label_id,
         label_name=label_name,
         list_name=list_name,
@@ -289,75 +293,112 @@ def fix_webhook_settings():
                 )
                 db.session.add(tws)
                 created_count += 1
+        
         db.session.commit()
-        return jsonify({'message': 'Fix applied', 'created': created_count}), 200
+        return jsonify({
+            'message': f'Created {created_count} missing TrelloWebhookSetting records',
+            'created_count': created_count
+        }), 200
     except Exception as e:
-        logger.error(f"Fix webhook settings failed: {e}")
-        return jsonify({'error': 'Fix failed'}), 500
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/webhook-settings', methods=['GET'])
+@login_required
+def get_webhook_settings():
+    settings = WebhookSetting.query.filter_by(user_email=current_user.email).all()
+    return jsonify([s.to_dict() for s in settings]), 200
 
 @app.route('/api/trello-webhook', methods=['GET', 'POST'])
 def trello_webhook():
     logger.info("=== WEBHOOK ENDPOINT CALLED ===")
     try:
-        if request.method == 'GET':
-            logger.info("trello_webhook :: GET request received, returning challenge")
-            return request.args.get('challenge', ''), 200
+        logger.debug(f"trello_webhook :: Method: {request.method}")
+        if request.method in ['GET', 'HEAD']:
+            logger.debug(f"trello_webhook :: Returning 200 for GET/HEAD request")
+            return '', 200
+        if request.method == 'POST':
+            logger.debug(f"trello_webhook :: Received POST request")
+            logger.debug(f"trello_webhook :: Content-Type: {request.content_type}")
+            if not request.is_json:
+                logger.warning(f"trello_webhook :: Not JSON content type, returning 415")
+                return jsonify({'error': 'Content-Type must be application/json'}), 415
+            payload = request.get_json(silent=True)
+            logger.debug(f"trello_webhook :: Payload keys: {list(payload.keys()) if payload else 'None'}")
+            if not payload:
+                logger.debug(f"trello_webhook :: No payload, returning success")
+                return jsonify({'success': True}), 200
+            if 'action' not in payload:
+                logger.warning(f"trello_webhook :: No action in payload, returning 400")
+                return jsonify({'error': 'Invalid webhook payload'}), 400
+            event_type = payload['action'].get('type')
+            logger.debug(f"trello_webhook :: event_type :: {event_type}")
 
-        payload = request.json
-        logger.info(f"trello_webhook :: Received payload keys: {list(payload.keys())}")
+            # Extract board_id from payload
+            board_id = None
+            if 'data' in payload['action'] and 'board' in payload['action']['data']:
+                board_id = payload['action']['data']['board'].get('id')
+            logger.debug(f"trello_webhook :: Extracted board_id: {board_id}")
+            if not board_id:
+                logger.warning(f"trello_webhook :: Missing board_id in payload")
+                return jsonify({'error': 'Missing board_id in payload'}), 400
 
-        if not payload:
-            logger.debug("trello_webhook :: No payload or action")
-            return jsonify({'status': 'ignored', 'reason': 'No action in payload'}), 200
+            # Look up TrelloWebhook for this board
+            trello_webhook = TrelloWebhook.query.filter_by(board_id=board_id).first()
+            logger.debug(f"trello_webhook :: Found TrelloWebhook: {trello_webhook is not None}")
+            if not trello_webhook:
+                logger.warning(f"trello_webhook :: No webhook registered for board {board_id}")
+                return jsonify({'error': 'No webhook registered for this board'}), 404
+            webhook_id = trello_webhook.webhook_id
+            logger.debug(f"trello_webhook :: Using webhook_id: {webhook_id}")
 
-        action = payload.get('action')
-        action_type = action.get('type') if action else None
-        logger.info(f"trello_webhook :: Action type: {action_type}")
+            # Look up event_type in TrelloWebhookSetting
+            # Map Trello event types to our custom event types
+            mapped_event_type = None
+            if event_type == "commentCard":
+                mapped_event_type = "Mentioned in a card"
+            elif event_type == "addMemberToCard":
+                mapped_event_type = "Added to a card"
+            else:
+                mapped_event_type = event_type  # Use as-is for other events
+            
+            logger.debug(f"trello_webhook :: Mapped event_type: {event_type} -> {mapped_event_type}")
+            
+            setting = TrelloWebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=mapped_event_type).first()
+            logger.debug(f"trello_webhook :: Found TrelloWebhookSetting: {setting is not None}")
+            if setting:
+                logger.debug(f"trello_webhook :: TrelloWebhookSetting enabled: {setting.enabled}")
+            if not setting or not setting.enabled:
+                logger.debug(f"trello_webhook :: Event type {mapped_event_type} not enabled or not found")
+                return jsonify({'status': 'ignored', 'reason': f'Event type {mapped_event_type} not enabled'}), 200
 
-        board = action.get('data', {}).get('board', {}) if action else None
-        board_id = board.get('id') if board else None
-        board_name = board.get('name') if board else None
+            # Get all user preferences for this webhook and event type
+            user_settings = WebhookSetting.query.filter_by(webhook_id=webhook_id, event_type=mapped_event_type).all()
+            logger.info(f"trello_webhook :: Found {len(user_settings)} user settings for event {mapped_event_type}")
+            
+            if not user_settings:
+                logger.debug(f"trello_webhook :: No user settings found for event type {mapped_event_type}")
+                return jsonify({'status': 'ignored', 'reason': f'No user settings found for event type {mapped_event_type}'}), 200
 
-        # Map certain frontend event labels to Trello event types
-        event_type_mapping = {
-            'Mentioned in a card': 'commentCard',
-            'Added to a card': 'addMemberToCard'
-        }
-        mapped_event_type = event_type_mapping.get(action_type, action_type)
-
-        if not mapped_event_type:
-            logger.debug("trello_webhook :: Mapped event type is None")
-            return jsonify({'status': 'ignored', 'reason': 'Unsupported event type'}), 200
-
-        # Find all users with webhook settings for this board and event type
-        user_settings = WebhookSetting.query.filter_by(board_id=board_id, event_type=mapped_event_type).all()
-
-        logger.info(f"trello_webhook :: Found {len(user_settings)} user settings for event {mapped_event_type}")
-        
-        if not user_settings:
-            logger.debug(f"trello_webhook :: No user settings found for event type {mapped_event_type}")
-            return jsonify({'status': 'ignored', 'reason': f'No user settings found for event type {mapped_event_type}'}), 200
-
-        # Process event for each user who has settings for this event
-        for user_setting in user_settings:
-            logger.info(f"trello_webhook :: Processing for user {user_setting.user_email}")
-            # Add user-specific context to the payload
-            enriched_payload = {
-                'trello_event': payload,
-                'user_email': user_setting.user_email,
-                'board_id': user_setting.board_id,
-                'board_name': user_setting.board_name,
-                'event_type': user_setting.event_type,
-                'label': user_setting.label,
-                'label_id': getattr(user_setting, 'label_id', None),
-                'label_name': getattr(user_setting, 'label_name', None),
-                'list_name': user_setting.list_name
-            }
-            logger.debug(f"trello_webhook :: Enqueuing task for user {user_setting.user_email}")
-            q.enqueue(process_trello_event, enriched_payload)
-        
-        logger.info(f"trello_webhook :: Queued {len(user_settings)} tasks for event {mapped_event_type}")
-        return jsonify({'status': 'queued', 'event_type': mapped_event_type, 'users_processed': len(user_settings)}), 200
+            # Process event for each user who has settings for this event
+            for user_setting in user_settings:
+                logger.info(f"trello_webhook :: Processing for user {user_setting.user_email}")
+                # Add user-specific context to the payload
+                enriched_payload = {
+                    'trello_event': payload,
+                    'user_email': user_setting.user_email,
+                    'board_id': user_setting.board_id,
+                    'board_name': user_setting.board_name,
+                    'event_type': user_setting.event_type,
+                    'label': user_setting.label,  # Keep for backward compatibility
+                    'label_id': user_setting.label_id,  # New: direct label ID
+                    'label_name': user_setting.label_name,  # New: label name for reference
+                    'list_name': user_setting.list_name
+                }
+                logger.debug(f"trello_webhook :: Enqueuing task for user {user_setting.user_email}")
+                q.enqueue(process_trello_event, enriched_payload)
+            
+            logger.info(f"trello_webhook :: Queued {len(user_settings)} tasks for event {mapped_event_type}")
+            return jsonify({'status': 'queued', 'event_type': mapped_event_type, 'users_processed': len(user_settings)}), 200
     except Exception as e:
         logger.error(f"trello_webhook :: {e}");
         return jsonify({'status': 'failed', 'error': str(e)});
@@ -402,31 +443,6 @@ def trello_get_boards():
             'lists': [l['name'] for l in lists_data]
         })
     return jsonify({'boards': boards_with_lists}), 200
-
-@app.route('/api/trello/labels', methods=['GET'])
-@login_required
-def trello_get_linked_board_labels():
-    """Return labels for the user's linked/created board (UserBoard)."""
-    user = current_user
-    if not user.apiKey or not user.token:
-        return jsonify({'error': 'Trello not linked'}), 400
-    user_board = UserBoard.query.filter_by(user_email=user.email).first()
-    if not user_board:
-        return jsonify({'error': 'No linked board found'}), 404
-    api_key = user.apiKey
-    token = user.token
-    labels_url = f'https://api.trello.com/1/boards/{user_board.board_id}/labels?key={api_key}&token={token}'
-    resp = requests.get(labels_url)
-    if resp.status_code != 200:
-        return jsonify({'error': 'Failed to fetch labels', 'details': resp.text}), 400
-    labels = resp.json()
-    # Normalize shape
-    normalized = [{
-        'id': l.get('id'),
-        'name': l.get('name') or '',
-        'color': l.get('color')
-    } for l in labels]
-    return jsonify({'board_id': user_board.board_id, 'labels': normalized}), 200
 
 @app.route('/api/trello/webhooks', methods=['POST'])
 @login_required
@@ -534,8 +550,52 @@ def setup_trello_board():
         lists[name] = list_data['id']
     user_board = UserBoard(user_email=user.email, board_id=board_id, board_name=board_name, lists=lists)
     db.session.add(user_board)
+    
+    # Store the linked board info in the user record
+    user.linked_board_id = board_id
+    user.linked_board_name = board_name
+    
     db.session.commit()
     return jsonify({'message': 'Board created', 'board': user_board.to_dict()}), 201
+
+@app.route('/api/trello/labels', methods=['GET'])
+@login_required
+def trello_get_labels():
+    """Fetch labels from the user's linked board"""
+    user = current_user
+    if not user.apiKey or not user.token:
+        return jsonify({'error': 'Trello not linked'}), 400
+    if not user.linked_board_id:
+        return jsonify({'error': 'No linked board found. Please connect to Trello first.'}), 400
+    
+    api_key = user.apiKey
+    token = user.token
+    board_id = user.linked_board_id
+    
+    try:
+        # Fetch labels from the linked board
+        labels_url = f'https://api.trello.com/1/boards/{board_id}/labels?key={api_key}&token={token}'
+        labels_resp = requests.get(labels_url)
+        
+        if labels_resp.status_code != 200:
+            return jsonify({'error': 'Failed to fetch labels', 'details': labels_resp.text}), 400
+        
+        labels_data = labels_resp.json()
+        
+        # Format labels for frontend consumption
+        formatted_labels = []
+        for label in labels_data:
+            formatted_labels.append({
+                'id': label.get('id'),
+                'name': label.get('name', 'Unnamed Label'),
+                'color': label.get('color', 'gray')
+            })
+        
+        return jsonify({'labels': formatted_labels}), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching labels for board {board_id}: {e}")
+        return jsonify({'error': 'Failed to fetch labels'}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
